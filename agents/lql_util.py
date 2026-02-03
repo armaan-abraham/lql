@@ -71,15 +71,6 @@ def get_chunk_utils(
     return chunk_utils, chunk_valids, chunk_completion_mask, chunk_continuation_mask
 
 def all_between(A):
-    """
-    Create array B where B[i,j] is True if all elements A(min(i,j):max(i,j)) are True (not including bounds).
-    
-    Args:
-        A: Boolean array of shape (n,)
-    
-    Returns:
-        Array of shape (n, n)
-    """
     assert A.dtype == jnp.bool_
 
     n = A.shape[0]
@@ -103,7 +94,7 @@ def all_between(A):
     
     return B
 
-def get_rectified_loss(
+def get_hinge_loss(
     q: jnp.ndarray,
     v_next: jnp.ndarray,
     utils_to_seq_end: jnp.ndarray,
@@ -284,7 +275,7 @@ def get_lql_critic_loss(
     discount: float,
     action_chunk_size: int = 1,
     action_chunk_eval_interval: int = 1,
-    rectified_loss_weight: float = 1.0,
+    hinge_loss_weight: float = 1.0,
 ):
     """
     Params:
@@ -338,7 +329,7 @@ def get_lql_critic_loss(
         action_chunk_eval_interval,
     )
 
-    rectified_loss, rectified_info = get_rectified_loss(
+    hinge_loss, hinge_info = get_hinge_loss(
         q,
         v_next,
         utils_to_seq_end,
@@ -353,16 +344,16 @@ def get_lql_critic_loss(
 
     info = {
         "td_loss": td_loss,
-        "rectified_loss": rectified_loss,
+        "hinge_loss": hinge_loss,
     }
 
     for k, v in td_info.items():
         info[f"td_loss/{k}"] = v
     
-    for k, v in rectified_info.items():
-        info[f"rectified_loss/{k}"] = v
+    for k, v in hinge_info.items():
+        info[f"hinge_loss/{k}"] = v
 
-    return td_loss + rectified_loss * rectified_loss_weight, info
+    return td_loss + hinge_loss * hinge_loss_weight, info
 
 if __name__ == "__main__":
     # Tests
