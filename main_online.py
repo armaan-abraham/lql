@@ -158,9 +158,10 @@ def main(_):
     )
 
     # transition from offline to online
-    example_batch_buff = train_dataset.sample_contiguous(config['batch_size'], sequence_length=1)
-    # Replay buffer expects no seq dim
-    example_batch_buff = {k: v.squeeze(axis=1) for k, v in example_batch_buff.items()}
+    example_batch_buff = train_dataset.sample_contiguous(1, sequence_length=1)
+
+    # Replay buffer expects no batch or seq dim
+    example_batch_buff = {k: v.squeeze(axis=(0, 1)) for k, v in example_batch_buff.items()}
     replay_buffer = ReplayBuffer.create(example_batch_buff, size=FLAGS.buffer_size)
         
     ob, _ = env.reset()
