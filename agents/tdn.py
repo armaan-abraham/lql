@@ -384,7 +384,7 @@ class TDnAgent(flax.struct.PyTreeNode):
 def get_config():
     config = ml_collections.ConfigDict(
         dict(
-            agent_name='TDn',
+            agent_name='tdn',
             
             action_dim=ml_collections.config_dict.placeholder(int),  # Action dimension (will be set automatically).
 
