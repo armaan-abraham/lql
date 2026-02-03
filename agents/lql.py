@@ -375,7 +375,7 @@ class LQLAgent(flax.struct.PyTreeNode):
         # Euler method.
         for i in range(self.config['flow_steps']):
             t = jnp.full(batch_dims + (1,), i / self.config['flow_steps'])
-            vels = self.network.select('actor')(observations, actions, t, is_encoded=True)
+            vels = self.network.select('actor')(observations, actions, t)
             actions = actions + vels / self.config['flow_steps']
         actions = jnp.clip(actions, -1, 1)
         return actions

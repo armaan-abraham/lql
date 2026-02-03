@@ -22,34 +22,6 @@ def ensemblize(cls, num_qs, in_axes=None, out_axes=0, **kwargs):
         **kwargs,
     )
 
-
-class FourierFeatures(nn.Module):
-    # used for timestep embedding
-    output_size: int = 64
-    learnable: bool = False
-
-    @nn.compact
-    def __call__(self, x: jnp.ndarray):
-        if self.learnable:
-            w = self.param('kernel', nn.initializers.normal(0.2),
-                           (self.output_size // 2, x.shape[-1]), jnp.float32)
-            f = 2 * jnp.pi * x @ w.T
-        else:
-            half_dim = self.output_size // 2
-            f = jnp.log(10000) / (half_dim - 1)
-            f = jnp.exp(jnp.arange(half_dim) * -f)
-            f = x * f
-        return jnp.concatenate([jnp.cos(f), jnp.sin(f)], axis=-1)
-
-
-
-class Identity(nn.Module):
-    """Identity layer."""
-
-    def __call__(self, x):
-        return x
-
-
 class MLP(nn.Module):
     """Multi-layer perceptron.
 
@@ -111,7 +83,6 @@ class Actor(nn.Module):
         state_dependent_std: Whether to use state-dependent standard deviation.
         const_std: Whether to use constant standard deviation.
         final_fc_init_scale: Initial scale of the final fully-connected layer.
-        encoder: Optional encoder module to encode the inputs.
     """
 
     hidden_dims: Sequence[int]
@@ -123,7 +94,6 @@ class Actor(nn.Module):
     state_dependent_std: bool = False
     const_std: bool = True
     final_fc_init_scale: float = 1e-2
-    encoder: nn.Module = None
 
     def setup(self):
         self.actor_net = MLP(self.hidden_dims, activate_final=True, layer_norm=self.layer_norm)
@@ -145,10 +115,7 @@ class Actor(nn.Module):
             observations: Observations.
             temperature: Scaling factor for the standard deviation.
         """
-        if self.encoder is not None:
-            inputs = self.encoder(observations)
-        else:
-            inputs = observations
+        inputs = observations
         outputs = self.actor_net(inputs)
 
         means = self.mean_net(outputs)
@@ -178,13 +145,11 @@ class Value(nn.Module):
         hidden_dims: Hidden layer dimensions.
         layer_norm: Whether to apply layer normalization.
         num_ensembles: Number of ensemble components.
-        encoder: Optional encoder module to encode the inputs.
     """
 
     hidden_dims: Sequence[int]
     layer_norm: bool = True
     num_ensembles: int = 2
-    encoder: nn.Module = None
 
     def setup(self):
         mlp_class = MLP
@@ -201,10 +166,7 @@ class Value(nn.Module):
             observations: Observations.
             actions: Actions (optional).
         """
-        if self.encoder is not None:
-            inputs = [self.encoder(observations)]
-        else:
-            inputs = [observations]
+        inputs = [observations]
         if actions is not None:
             inputs.append(actions)
         inputs = jnp.concatenate(inputs, axis=-1)
@@ -221,38 +183,27 @@ class ActorVectorField(nn.Module):
         hidden_dims: Hidden layer dimensions.
         action_dim: Action dimension.
         layer_norm: Whether to apply layer normalization.
-        encoder: Optional encoder module to encode the inputs.
     """
 
     hidden_dims: Sequence[int]
     action_dim: int
     layer_norm: bool = False
-    encoder: nn.Module = None
-    use_fourier_features: bool = False
-    fourier_feature_dim: int = 64
 
     def setup(self) -> None:
         self.mlp = MLP((*self.hidden_dims, self.action_dim), activate_final=False, layer_norm=self.layer_norm)
-        if self.use_fourier_features:
-            self.ff = FourierFeatures(self.fourier_feature_dim)
 
     @nn.compact
-    def __call__(self, observations, actions, times=None, is_encoded=False):
+    def __call__(self, observations, actions, times=None):
         """Return the vectors at the given states, actions, and times (optional).
 
         Args:
             observations: Observations.
             actions: Actions.
             times: Times (optional).
-            is_encoded: Whether the observations are already encoded.
         """
-        if not is_encoded and self.encoder is not None:
-            observations = self.encoder(observations)
         if times is None:
             inputs = jnp.concatenate([observations, actions], axis=-1)
         else:
-            if self.use_fourier_features:
-                times = self.ff(times)
             inputs = jnp.concatenate([observations, actions, times], axis=-1)
 
         v = self.mlp(inputs)
