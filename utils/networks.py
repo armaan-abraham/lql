@@ -201,9 +201,11 @@ class ActorVectorField(nn.Module):
             actions: Actions.
             times: Times (optional).
         """
+        assert observations.shape[:-1] == actions.shape[:-1], (observations.shape, actions.shape)
         if times is None:
             inputs = jnp.concatenate([observations, actions], axis=-1)
         else:
+            assert times.shape == observations.shape[:-1] + (1,), (times.shape, observations.shape)
             inputs = jnp.concatenate([observations, actions, times], axis=-1)
 
         v = self.mlp(inputs)
