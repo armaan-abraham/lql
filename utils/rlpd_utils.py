@@ -1,11 +1,8 @@
 import functools
 from typing import Any, Optional, Type
 
-import tensorflow_probability
-
 from tensorflow_probability.substrates import jax as tfp
 
-import jax
 import flax.linen as nn
 import jax.numpy as jnp
 
