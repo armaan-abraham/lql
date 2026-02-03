@@ -78,6 +78,9 @@ def main(_):
 
     config = FLAGS.agent
     
+    random.seed(FLAGS.seed)
+    np.random.seed(FLAGS.seed)
+
     # data loading
     if FLAGS.ogbench_dataset_dir is not None:
         # custom ogbench dataset
@@ -94,10 +97,6 @@ def main(_):
         )
     else:
         env, eval_env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name)
-
-    # house keeping
-    random.seed(FLAGS.seed)
-    np.random.seed(FLAGS.seed)
 
     online_rng, rng = jax.random.split(jax.random.PRNGKey(FLAGS.seed), 2)
     log_step = 0
