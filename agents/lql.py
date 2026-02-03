@@ -303,7 +303,7 @@ class LQLAgent(flax.struct.PyTreeNode):
         # observation dimension.
         if self.config['actor_type'] == 'best-of-n':
             batch_dims = observations.shape[:-1]
-            observations = observations.reshape((-1, observations.shape[-1]))
+            observations = observations.reshape((-1, self.config['obs_dim']))
             num_observations = observations.shape[0]
             noises = jax.random.normal(
                 rng,
@@ -321,28 +321,10 @@ class LQLAgent(flax.struct.PyTreeNode):
             actions = self.compute_flow_actions(observations, noises)
             actions = jnp.clip(actions, -1, 1)
             assert actions.shape == (num_observations, self.config['actor_num_samples'], self.config['action_chunk_dim'])
-
-            actions_seq = rearrange(
-                actions,
-                "batch sample act_dim -> (batch sample) 1 act_dim",
-            )
-            observations_seq = rearrange(
-                observations,
-                "batch sample obs_dim -> (batch sample) 1 obs_dim",
-            )
-        
-            q_ens = self.network.select("critic")(observations_seq, actions=actions_seq)
-            assert q_ens.shape == ((self.config['num_critics'], num_observations * self.config['actor_num_samples'], 1))
-            q_ens = rearrange(
-                q_ens,
-                "ensemble (batch sample) 1 -> ensemble batch sample",
-                batch=num_observations,                
-                sample=self.config["actor_num_samples"],
-            )
+            q_ens = self.network.select('critic')(observations, actions=actions)
+            assert q_ens.shape == ((self.config['num_critics'], num_observations, self.config['actor_num_samples']))
             q = reduce(q_ens, 'ensemble batch sample -> batch sample', 'mean')
-            assert q.shape == (num_observations, self.config['actor_num_samples'])
-
-            actions = actions[jnp.arange(num_observations), jnp.argmax(q, axis=-1)].reshape(batch_dims + (self.config['action_chunk_dim'],))
+            actions = actions[jnp.arange(num_observations), jnp.argmax(q, axis=1)].reshape(batch_dims + (self.config['action_chunk_dim'],))
 
         elif self.config['actor_type'] == 'fql':
             noises = jax.random.normal(
