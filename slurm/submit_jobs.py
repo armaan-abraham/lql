@@ -7,6 +7,7 @@ Each segment between delimiters runs as its own job.
 
 import argparse
 import getpass
+import re
 import subprocess
 import tempfile
 import time
@@ -42,6 +43,43 @@ def parse_commands_file(filepath: Path) -> list[str]:
     segments = content.split("\n====\n")
     # Filter out empty segments
     return [seg for seg in segments if seg.strip()]
+
+
+def expand_seed_range(command: str) -> list[str]:
+    """
+    Expand seed range notation like --seed=[0-3] into multiple commands.
+    Returns a list of commands with the range replaced by each seed value.
+    Asserts that the notation is used at most once per command.
+    """
+    pattern = r"--seed=\[(\d+)-(\d+)\]"
+    matches = list(re.finditer(pattern, command))
+
+    if not matches:
+        return [command]
+
+    assert len(matches) == 1, (
+        f"Seed range notation --seed=[X-Y] can only be used once per command, "
+        f"found {len(matches)} occurrences"
+    )
+
+    match = matches[0]
+    start = int(match.group(1))
+    end = int(match.group(2))
+
+    expanded = []
+    for seed in range(start, end + 1):
+        expanded_cmd = command[: match.start()] + f"--seed={seed}" + command[match.end() :]
+        expanded.append(expanded_cmd)
+
+    return expanded
+
+
+def expand_all_commands(commands: list[str]) -> list[str]:
+    """Expand seed ranges in all commands."""
+    expanded = []
+    for cmd in commands:
+        expanded.extend(expand_seed_range(cmd))
+    return expanded
 
 
 def count_running_jobs_in_partition(partition: str) -> int:
@@ -130,6 +168,7 @@ def main():
         hi_template = args.hi_template.read_text()
 
     command_segments = parse_commands_file(args.commands_file)
+    command_segments = expand_all_commands(command_segments)
     print(f"Found {len(command_segments)} job(s) to submit")
 
     idx = 0
