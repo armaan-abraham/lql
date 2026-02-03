@@ -42,7 +42,7 @@ flags.DEFINE_integer('eval_episodes', 50, 'Number of evaluation episodes.')
 flags.DEFINE_integer('video_episodes', 0, 'Number of video episodes for each task.')
 flags.DEFINE_integer('video_frame_skip', 3, 'Frame skip for videos.')
 
-config_flags.DEFINE_config_file('agent', 'agents/acrlpd.py', lock_config=False)
+config_flags.DEFINE_config_file('agent', 'agents/lql.py', lock_config=False)
 
 flags.DEFINE_float('dataset_proportion', 1.0, "Proportion of the dataset to use")
 flags.DEFINE_integer('dataset_replace_interval', 1000, 'Dataset replace interval, used for large datasets because of memory constraints')
@@ -159,7 +159,9 @@ def main(_):
     )
 
     # transition from offline to online
-    example_batch_buff = train_dataset.sample(())
+    example_batch_buff = train_dataset.sample_contiguous(config['batch_size'], sequence_length=1)
+    # Replay buffer expects no seq dim
+    example_batch_buff = {k: v.squeeze(axis=1) for k, v in example_batch_buff.items()}
     replay_buffer = ReplayBuffer.create(example_batch_buff, size=FLAGS.buffer_size)
         
     ob, _ = env.reset()
@@ -251,8 +253,6 @@ def main(_):
             batch = {k: np.concatenate([
                 dataset_batch[k].reshape((FLAGS.utd_ratio, config["batch_size"] // 2) + dataset_batch[k].shape[1:]), 
                 replay_batch[k].reshape((FLAGS.utd_ratio, config["batch_size"] // 2) + replay_batch[k].shape[1:])], axis=1) for k in dataset_batch}
-            # batch = jax.tree.map(lambda x: x.reshape((
-            #     FLAGS.utd_ratio, config["batch_size"]) + x.shape[1:]), batch)
 
             agent, update_info["online_agent"] = agent.batch_update(batch)
             

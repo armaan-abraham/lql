@@ -1,9 +1,9 @@
 from agents.acfql import ACFQLAgent
 from agents.acrlpd import ACRLPDAgent
-from agents.cql import CQLAgent
+from agents.lql import LQLAgent
 
 agents = dict(
     acfql=ACFQLAgent,
     acrlpd=ACRLPDAgent,
-    cql=CQLAgent,
+    lql=LQLAgent,
 )

@@ -2,38 +2,6 @@ import jax
 import jax.numpy as jnp
 from einops import repeat, rearrange, einsum
 
-def all_between(A):
-    """
-    Create array B where B[i,j] is True if all elements A(min(i,j):max(i,j)) are True (not including bounds).
-    
-    Args:
-        A: Boolean array of shape (n,)
-    
-    Returns:
-        Array of shape (n, n)
-    """
-    assert A.dtype == jnp.bool_
-
-    n = A.shape[0]
-    
-    cumsum = jnp.cumsum(A)
-    
-    # Create indices
-    i = jnp.arange(n)[:, None]  # (n, 1)
-    j = jnp.arange(n)[None, :]  # (1, n)
-    
-    # Prepend 0 to cumsum for easier indexing
-    cumsum_padded = jnp.concatenate([jnp.array([0]), cumsum])
-    
-    lo = jnp.minimum(i, j) + 1
-    hi = jnp.maximum(i, j)
-    
-    range_sum = jnp.maximum(cumsum_padded[hi] - cumsum_padded[lo], 0)
-    range_len = jnp.maximum(hi - lo, 0)
-    
-    B = range_sum == range_len
-    
-    return B
 
 def get_utils_to_seq_end(
     rewards: jnp.ndarray,
@@ -101,6 +69,39 @@ def get_chunk_utils(
     assert chunk_completion_mask.shape == (batch_size, num_chunks)
     chunk_continuation_mask = continuation_mask[:, chunk_start_idx + action_chunk_size - 1]
     return chunk_utils, chunk_valids, chunk_completion_mask, chunk_continuation_mask
+
+def all_between(A):
+    """
+    Create array B where B[i,j] is True if all elements A(min(i,j):max(i,j)) are True (not including bounds).
+    
+    Args:
+        A: Boolean array of shape (n,)
+    
+    Returns:
+        Array of shape (n, n)
+    """
+    assert A.dtype == jnp.bool_
+
+    n = A.shape[0]
+    
+    cumsum = jnp.cumsum(A)
+    
+    # Create indices
+    i = jnp.arange(n)[:, None]  # (n, 1)
+    j = jnp.arange(n)[None, :]  # (1, n)
+    
+    # Prepend 0 to cumsum for easier indexing
+    cumsum_padded = jnp.concatenate([jnp.array([0]), cumsum])
+    
+    lo = jnp.minimum(i, j) + 1
+    hi = jnp.maximum(i, j)
+    
+    range_sum = jnp.maximum(cumsum_padded[hi] - cumsum_padded[lo], 0)
+    range_len = jnp.maximum(hi - lo, 0)
+    
+    B = range_sum == range_len
+    
+    return B
 
 def get_rectified_loss(
     q: jnp.ndarray,
@@ -248,7 +249,7 @@ def get_rectified_loss(
         "num_valid_upper_bound_terms": jnp.sum(upper_bound_diffs_valid.astype(jnp.int32)),
     }
 
-def get_bellman_loss(
+def get_td_loss(
     q: jnp.ndarray,
     v_next: jnp.ndarray,
     chunk_utils: jnp.ndarray,
@@ -264,17 +265,17 @@ def get_bellman_loss(
         (chunk_utils, chunk_valids, chunk_completion_mask),
     )
     targets = (eval_chunk_utils + v_next * (discount ** action_chunk_size) * (1 - eval_chunk_completion_mask.astype(q.dtype)))
-    bellman_loss = jnp.sum(
+    td_loss = jnp.sum(
         (
             q - targets
         ) ** 2 * eval_chunk_valids
     ) / jnp.maximum(jnp.sum(eval_chunk_valids.astype(jnp.int32)), 1)
-    return bellman_loss, {
-        "bellman_target_mean": jnp.sum(targets * eval_chunk_valids) / jnp.maximum(jnp.sum(eval_chunk_valids), 1),
-        "num_valid_bellman_terms": jnp.sum(eval_chunk_valids.astype(jnp.int32)),
+    return td_loss, {
+        "td_target_mean": jnp.sum(targets * eval_chunk_valids) / jnp.maximum(jnp.sum(eval_chunk_valids), 1),
+        "num_valid_td_terms": jnp.sum(eval_chunk_valids.astype(jnp.int32)),
     }
 
-def get_lql_loss(
+def get_lql_critic_loss(
     q: jnp.ndarray,
     v_next: jnp.ndarray,
     rewards: jnp.ndarray,
@@ -326,7 +327,7 @@ def get_lql_loss(
     assert chunk_valids.dtype == jnp.bool
     assert chunk_completion_mask.dtype == jnp.bool
 
-    bellman_loss, bellman_info = get_bellman_loss(
+    td_loss, td_info = get_td_loss(
         q,
         v_next,
         chunk_utils,
@@ -351,19 +352,20 @@ def get_lql_loss(
     )
 
     info = {
-        "bellman_loss": bellman_loss,
+        "td_loss": td_loss,
         "rectified_loss": rectified_loss,
     }
 
-    for k, v in bellman_info.items():
-        info[f"bellman_loss/{k}"] = v
+    for k, v in td_info.items():
+        info[f"td_loss/{k}"] = v
     
     for k, v in rectified_info.items():
         info[f"rectified_loss/{k}"] = v
 
-    return bellman_loss + rectified_loss * rectified_loss_weight, info
+    return td_loss + rectified_loss * rectified_loss_weight, info
 
 if __name__ == "__main__":
+    # Tests
     print("*************************")
     A = jnp.array([1, 1, 1, 1, 0, 1, ]).astype(bool)
     print("A\n", A.astype(jnp.int32))
@@ -495,7 +497,7 @@ if __name__ == "__main__":
     print("q_a_star_next")
     print(q_a_star_next)
 
-    loss = get_lql_loss(
+    loss = get_lql_critic_loss(
         q,
         q_a_star_next,
         rewards,

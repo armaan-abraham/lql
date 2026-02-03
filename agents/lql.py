@@ -1,5 +1,5 @@
 import copy
-from typing import Any, Sequence
+from typing import Any
 from functools import partial
 
 import flax
@@ -7,27 +7,16 @@ import jax
 import jax.numpy as jnp
 import ml_collections
 import optax
-from einops import repeat, einsum, rearrange, reduce
+from einops import repeat, rearrange, reduce
 from flax import linen as nn
 
 from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
 from utils.networks import ActorVectorField, Value, MLP
-from agents.cql_util import get_lql_loss
-from rlpd_distributions import TanhNormal
+from utils.rlpd_utils import TanhNormal, Temperature
+from agents.lql_util import get_lql_critic_loss
 
-class Temperature(nn.Module):
-    initial_temperature: float = 1.0
-
-    @nn.compact
-    def __call__(self) -> jnp.ndarray:
-        log_temp = self.param(
-            "log_temp",
-            init_fn=lambda key: jnp.full((), jnp.log(self.initial_temperature)),
-        )
-        return jnp.exp(log_temp)
-
-class CQLAgent(flax.struct.PyTreeNode):
-    """Coherent Q learning (CQL) agent."""
+class LQLAgent(flax.struct.PyTreeNode):
+    """Long-horizon Q-learning (LQL) agent."""
 
     rng: Any
     network: Any
@@ -59,8 +48,9 @@ class CQLAgent(flax.struct.PyTreeNode):
         q_ens = self.network.select('critic')(batch_select['observations'], actions=batch_select['action_chunks'], params=grad_params)
         assert q_ens.shape == (self.config['num_critics'], batch_size, self.config['num_eval_chunks_per_seq'])
 
+        # vmap across ensemble dimension
         q_loss_ens, q_loss_info_ens = jax.vmap(
-            get_lql_loss,
+            get_lql_critic_loss,
             in_axes=(0, None, None, None, None, None, None, None, None),
         )(
             q_ens,
@@ -401,7 +391,6 @@ class CQLAgent(flax.struct.PyTreeNode):
         assert ex_observations.ndim == 3, ex_observations.shape
         assert ex_actions.ndim == 3, ex_actions.shape
         assert config['horizon_length'] % (config['action_chunk_size'] * config['action_chunk_eval_interval']) == 0
-        assert config['encoder'] is None, "Visual tasks are not yet supported"
         assert not (config['actor_type'] == 'gaussian' and config['action_chunk_size'] > 1), "Gaussian actor with action chunking is not supported"
 
         rng = jax.random.PRNGKey(seed)
@@ -488,9 +477,8 @@ class CQLAgent(flax.struct.PyTreeNode):
 def get_config():
     config = ml_collections.ConfigDict(
         dict(
-            agent_name='cql',
+            agent_name='lql',
             
-            encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
             action_dim=ml_collections.config_dict.placeholder(int),  # Action dimension (will be set automatically).
 
             horizon_length=ml_collections.config_dict.placeholder(int), # Will be set
