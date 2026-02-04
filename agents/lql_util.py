@@ -9,7 +9,7 @@ def get_utils_to_seq_end(
 ):
     batch_size, seq_len = rewards.shape
 
-    utils_to_seq_end = jnp.zeros((batch_size, seq_len), dtype=rewards.dtype)
+    utils_to_seq_end = jnp.zeros((batch_size, seq_len), dtype=float)
 
     # These utils are only meaningful when used to compute relative utils
     # between transitions in the same trajectory
@@ -24,7 +24,7 @@ def get_utils_to_seq_end(
     
     # Pad with an extra zero at the end for easier indexing
     utils_to_seq_end = jnp.concatenate(
-        [utils_to_seq_end, jnp.zeros((batch_size, 1), dtype=rewards.dtype)],
+        [utils_to_seq_end, jnp.zeros((batch_size, 1), dtype=float)],
         axis=1,
     )
     
@@ -304,7 +304,7 @@ def get_lql_critic_loss(
         rewards,
         discount,
     )
-    assert utils_to_seq_end.dtype == jnp.float32
+    assert utils_to_seq_end.dtype == jnp.float64
 
     chunk_utils, chunk_valids, chunk_completion_mask, chunk_continuation_mask = get_chunk_utils(
         rewards,
@@ -314,7 +314,7 @@ def get_lql_critic_loss(
         discount,
         action_chunk_size,
     )
-    assert chunk_utils.dtype == jnp.float32
+    assert chunk_utils.dtype == jnp.float64
     assert chunk_valids.dtype == jnp.bool
     assert chunk_completion_mask.dtype == jnp.bool
 
