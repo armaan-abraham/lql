@@ -1,12 +1,16 @@
 import jax
 import jax.numpy as jnp
 from einops import repeat, rearrange, einsum
+from jaxtyping import Array, Float, Int, jaxtyped, Bool
+from beartype import beartype
+from typing import Tuple, Dict
 
 
+@jaxtyped(typechecker=beartype)
 def get_utils_to_seq_end(
-    rewards: jnp.ndarray,
+    rewards: Float[Array, 'batch seq'],
     discount: float,
-):
+) -> Float[Array, 'batch seq_plus_one']:
     batch_size, seq_len = rewards.shape
 
     utils_to_seq_end = jnp.zeros((batch_size, seq_len), dtype=float)
@@ -30,20 +34,26 @@ def get_utils_to_seq_end(
     
     return utils_to_seq_end
 
+@jaxtyped(typechecker=beartype)
 def get_chunk_utils(
-    rewards: jnp.ndarray,
-    utils_to_seq_end: jnp.ndarray,
-    completion_mask: jnp.ndarray,
-    continuation_mask: jnp.ndarray,
+    rewards: Float[Array, 'batch seq'],
+    utils_to_seq_end: Float[Array, 'batch seq_plus_one'],
+    completion_mask: Bool[Array, 'batch seq'],
+    continuation_mask: Bool[Array, 'batch seq'],
     discount: float,
     action_chunk_size: int,
-):
+) -> Tuple[
+        Float[Array, 'batch chunk'],
+        Bool[Array, 'batch chunk'],
+        Bool[Array, 'batch chunk'],
+        Bool[Array, 'batch chunk'],
+    ]:
     """
-    Compute the utilities in each action chunk.
+    Compute the utilities from each action chunk start to end.
     """
     batch_size, seq_len = rewards.shape
-    num_chunks = seq_len // action_chunk_size
     assert utils_to_seq_end.shape == (batch_size, seq_len + 1)
+    num_chunks = seq_len // action_chunk_size
 
     chunk_start_idx = jnp.arange(0, seq_len, action_chunk_size)
     # This will use the util to seq end from the next chunk, which may not be
@@ -53,7 +63,6 @@ def get_chunk_utils(
     chunk_utils = utils_to_seq_end[:, chunk_start_idx] - (
         discount ** action_chunk_size * utils_to_seq_end[:, chunk_start_idx + action_chunk_size]
     )
-    assert chunk_utils.shape == (batch_size, num_chunks)
     continuation_mask_by_chunk = rearrange(
         continuation_mask,
         "batch (num_chunks chunk_size) -> batch num_chunks chunk_size",
@@ -64,14 +73,12 @@ def get_chunk_utils(
         continuation_mask_by_chunk[:, :, :-1],
         axis=-1,
     )
-    assert chunk_valids.shape == (batch_size, num_chunks)
     chunk_completion_mask = completion_mask[:, chunk_start_idx + action_chunk_size - 1]
-    assert chunk_completion_mask.shape == (batch_size, num_chunks)
     chunk_continuation_mask = continuation_mask[:, chunk_start_idx + action_chunk_size - 1]
     return chunk_utils, chunk_valids, chunk_completion_mask, chunk_continuation_mask
 
-def all_between(A):
-    assert A.dtype == jnp.bool_
+@jaxtyped(typechecker=beartype)
+def all_between(A: Bool[Array, 'n']) -> Bool[Array, 'n n']:
 
     n = A.shape[0]
     
@@ -94,18 +101,27 @@ def all_between(A):
     
     return B
 
-def get_hinge_loss(
-    q: jnp.ndarray,
-    v_next: jnp.ndarray,
-    utils_to_seq_end: jnp.ndarray,
-    chunk_utils: jnp.ndarray,
-    chunk_valids: jnp.ndarray,
-    chunk_completion_mask: jnp.ndarray,
-    chunk_continuation_mask: jnp.ndarray,
+
+@jaxtyped(typechecker=beartype)
+def get_hinge_loss_for_critic(
+    q: Float[Array, 'batch eval_chunk'],
+    v_next: Float[Array, 'batch eval_chunk'],
+    utils_to_seq_end: Float[Array, 'batch seq_plus_one'],
+    chunk_utils: Float[Array, 'batch chunk'],
+    chunk_valids: Bool[Array, 'batch chunk'],
+    chunk_completion_mask: Bool[Array, 'batch chunk'],
+    chunk_continuation_mask: Bool[Array, 'batch chunk'],
     discount: float,
     action_chunk_size: int,
     action_chunk_eval_interval: int,
-):
+) -> Tuple[
+        # Lower bound terms and denominator
+        Float[Array, 'batch eval_chunk eval_chunk'],
+        Int[Array, ''],
+        # Upper bound terms and denominator
+        Float[Array, 'batch eval_chunk eval_chunk'],
+        Int[Array, ''],
+    ]:
     """
     q and v_next are expected to be provided for each eval chunk (q at chunk
     start and v_next at chunk end).
@@ -185,12 +201,11 @@ def get_hinge_loss(
         "batch chunk_post -> batch chunk_pre chunk_post",
         chunk_pre=num_eval_chunks,
     )
-    lower_bound_loss = jnp.sum(
-        jnp.maximum(
-            mixed_util_from_eval_chunk_pre - util_from_eval_chunk_pre,
-            0.0,
-        ) ** 2 * lower_bound_diffs_valid
-    ) / jnp.maximum(jnp.sum(lower_bound_diffs_valid.astype(jnp.int32)), 1)
+    lower_bound_errors = jnp.maximum(
+        mixed_util_from_eval_chunk_pre - util_from_eval_chunk_pre,
+        0.0,
+    ) ** 2 * lower_bound_diffs_valid
+    lower_bound_denom = jnp.maximum(jnp.sum(lower_bound_diffs_valid.astype(jnp.int32)), 1)
 
     # Compute upper bound loss by comparing later q values to earlier v_next values.
 
@@ -227,75 +242,113 @@ def get_hinge_loss(
         "batch chunk_post -> batch chunk_pre chunk_post",
         chunk_pre=num_eval_chunks,
     )
-    upper_bound_loss = jnp.sum(
-        jnp.maximum(
-            mixed_util_from_eval_chunk_end_pre - util_from_eval_chunk_end_pre,
-            0.0,
-        ) ** 2 * upper_bound_diffs_valid
-    ) / jnp.maximum(jnp.sum(upper_bound_diffs_valid.astype(jnp.int32)), 1)
-    return lower_bound_loss + upper_bound_loss, {
-        "lower_bound_loss": lower_bound_loss,
-        "upper_bound_loss": upper_bound_loss,
-        "num_valid_lower_bound_terms": jnp.sum(lower_bound_diffs_valid.astype(jnp.int32)),
-        "num_valid_upper_bound_terms": jnp.sum(upper_bound_diffs_valid.astype(jnp.int32)),
-    }
+    upper_bound_errors = jnp.maximum(
+        mixed_util_from_eval_chunk_end_pre - util_from_eval_chunk_end_pre,
+        0.0,
+    ) ** 2 * upper_bound_diffs_valid
+    upper_bound_denom = jnp.maximum(jnp.sum(upper_bound_diffs_valid.astype(jnp.int32)), 1)
 
-def get_td_loss(
-    q: jnp.ndarray,
-    v_next: jnp.ndarray,
-    chunk_utils: jnp.ndarray,
-    chunk_valids: jnp.ndarray,
-    chunk_completion_mask: jnp.ndarray,
+    return lower_bound_errors, lower_bound_denom, upper_bound_errors, upper_bound_denom
+
+@jaxtyped(typechecker=beartype)
+def get_hinge_loss(
+    q: Float[Array, 'critic batch eval_chunk'],
+    v_next: Float[Array, 'batch eval_chunk'],
+    utils_to_seq_end: Float[Array, 'batch seq_plus_one'],
+    chunk_utils: Float[Array, 'batch chunk'],
+    chunk_valids: Bool[Array, 'batch chunk'],
+    chunk_completion_mask: Bool[Array, 'batch chunk'],
+    chunk_continuation_mask: Bool[Array, 'batch chunk'],
     discount: float,
     action_chunk_size: int,
     action_chunk_eval_interval: int,
-):
+) -> Tuple[Float[Array, ''], Dict]:
+    num_critics, batch_size, num_eval_chunks = q.shape
+
+
+    # vmap across ensemble dimension
+    lower_bound_errors, lower_bound_denom, upper_bound_errors, upper_bound_denom = jax.vmap(
+        get_hinge_loss_for_critic,
+        in_axes=(0, None, None, None, None, None, None, None, None, None),
+    )(
+        q,
+        v_next,
+        utils_to_seq_end,
+        chunk_utils,
+        chunk_valids,
+        chunk_completion_mask,
+        chunk_continuation_mask,
+        discount,
+        action_chunk_size,
+        action_chunk_eval_interval,
+    )
+    assert lower_bound_errors.shape == (num_critics, batch_size, num_eval_chunks, num_eval_chunks)
+    assert upper_bound_errors.shape == (num_critics, batch_size, num_eval_chunks, num_eval_chunks)
+    assert lower_bound_denom.shape == (num_critics,)
+    assert upper_bound_denom.shape == (num_critics,)
+
+    lower_bound_loss = jnp.sum(lower_bound_errors) / jnp.sum(lower_bound_denom)
+    upper_bound_loss = jnp.sum(upper_bound_errors) / jnp.sum(upper_bound_denom)
+
+    return lower_bound_loss + upper_bound_loss, {
+        "lower_bound_loss": lower_bound_loss,
+        "upper_bound_loss": upper_bound_loss,
+        "num_valid_lower_bound_terms": lower_bound_denom.mean(),
+        "num_valid_upper_bound_terms": upper_bound_denom.mean(),
+    }
+
+@jaxtyped(typechecker=beartype)
+def get_td_loss(
+    q: Float[Array, 'critic batch eval_chunk'],
+    v_next: Float[Array, 'batch eval_chunk'],
+    chunk_utils: Float[Array, 'batch chunk'],
+    chunk_valids: Bool[Array, 'batch chunk'],
+    chunk_completion_mask: Bool[Array, 'batch chunk'],
+    discount: float,
+    action_chunk_size: int,
+    action_chunk_eval_interval: int,
+) -> Tuple[Float[Array, ''], Dict]:
+    num_critics, batch_size, num_eval_chunks = q.shape
     # Select chunks with value evaluations
     eval_chunk_utils, eval_chunk_valids, eval_chunk_completion_mask = jax.tree_util.tree_map(
         lambda x: x[:, ::action_chunk_eval_interval],
         (chunk_utils, chunk_valids, chunk_completion_mask),
     )
-    targets = (eval_chunk_utils + v_next * (discount ** action_chunk_size) * (1 - eval_chunk_completion_mask.astype(q.dtype)))
+    targets = (eval_chunk_utils + v_next * (discount ** action_chunk_size) * (1 - eval_chunk_completion_mask.astype(float)))
+    assert targets.shape == eval_chunk_valids.shape == (batch_size, num_eval_chunks)
     td_loss = jnp.sum(
         (
             q - targets
         ) ** 2 * eval_chunk_valids
-    ) / jnp.maximum(jnp.sum(eval_chunk_valids.astype(jnp.int32)), 1)
+    ) / jnp.maximum(jnp.sum(eval_chunk_valids.astype(jnp.int32)), 1) / num_critics
     return td_loss, {
         "td_target_mean": jnp.sum(targets * eval_chunk_valids) / jnp.maximum(jnp.sum(eval_chunk_valids), 1),
         "num_valid_td_terms": jnp.sum(eval_chunk_valids.astype(jnp.int32)),
     }
 
+@jaxtyped(typechecker=beartype)
 def get_lql_critic_loss(
-    q: jnp.ndarray,
-    v_next: jnp.ndarray,
-    rewards: jnp.ndarray,
-    completion_mask: jnp.ndarray,
-    continuation_mask: jnp.ndarray,
+    q: Float[Array, 'critic batch eval_chunk'],
+    v_next: Float[Array, 'batch eval_chunk'],
+    rewards: Float[Array, 'batch seq'],
+    completion_mask: Bool[Array, 'batch seq'],
+    continuation_mask: Bool[Array, 'batch seq'],
     discount: float,
     action_chunk_size: int = 1,
     action_chunk_eval_interval: int = 1,
     hinge_loss_weight: float = 1.0,
-):
+) -> Tuple[Float[Array, ''], Dict]:
     """
     Params:
+        v_next: Assumed to already be reduced across ensemble dimension.
         action_chunk_size: Number of actions for a chunked policy / value
-        function. This is also the number of actions between each q and its
-        corresponding v_next.
+            function. This is also the number of actions between each q and its
+            corresponding v_next.
         action_chunk_eval_interval: Number of chunks between each evaluation of
-        the chunked value function.
+            the chunked value function.
     """
-    assert jnp.issubdtype(q.dtype, jnp.floating)
-    assert jnp.issubdtype(v_next.dtype, jnp.floating)
-    assert jnp.issubdtype(rewards.dtype, jnp.floating)
     batch_size, seq_len = rewards.shape
     assert seq_len % (action_chunk_size * action_chunk_eval_interval) == 0
-    num_chunks = seq_len // action_chunk_size
-    num_eval_chunks = num_chunks // action_chunk_eval_interval
-    assert q.shape == v_next.shape == (batch_size, num_eval_chunks)
-    assert completion_mask.shape == continuation_mask.shape == (batch_size, seq_len)
-    assert completion_mask.dtype == jnp.bool_
-    assert continuation_mask.dtype == jnp.bool_
 
     # Set completions to discontinuations
     continuation_mask = continuation_mask & ~completion_mask
@@ -304,7 +357,6 @@ def get_lql_critic_loss(
         rewards,
         discount,
     )
-    assert jnp.issubdtype(utils_to_seq_end.dtype, jnp.floating)
 
     chunk_utils, chunk_valids, chunk_completion_mask, chunk_continuation_mask = get_chunk_utils(
         rewards,
@@ -314,9 +366,6 @@ def get_lql_critic_loss(
         discount,
         action_chunk_size,
     )
-    assert jnp.issubdtype(chunk_utils.dtype, jnp.floating)
-    assert chunk_valids.dtype == jnp.bool
-    assert chunk_completion_mask.dtype == jnp.bool
 
     td_loss, td_info = get_td_loss(
         q,
@@ -358,19 +407,6 @@ def get_lql_critic_loss(
 if __name__ == "__main__":
     # Tests
     print("*************************")
-    A = jnp.array([1, 1, 1, 1, 0, 1, ]).astype(bool)
-    print("A\n", A.astype(jnp.int32))
-    print("all between \n", all_between(A).astype(jnp.int32))
-
-    B = jnp.arange(8).reshape(4,2)
-    print("B\n", B)
-    
-
-    print(rearrange(
-        B,
-        "(num_chunks chunk_size) dim -> num_chunks (chunk_size dim)",
-        chunk_size=2,
-    ))
 
     # # Chunk case
     discount = 0.9
@@ -461,8 +497,8 @@ if __name__ == "__main__":
     # )
 
     # Shape constants
-    BATCH_SIZE = 2
-    SEQ_LEN = 4
+    BATCH_SIZE = 256
+    SEQ_LEN = 1
 
     key = jax.random.PRNGKey(42)
     keys = jax.random.split(key, 5)
@@ -470,23 +506,20 @@ if __name__ == "__main__":
     rewards = jax.random.uniform(keys[0], (BATCH_SIZE, SEQ_LEN), minval=1.0, maxval=15.0)
     q_a_star_next = jax.random.uniform(keys[1], (BATCH_SIZE, SEQ_LEN), minval=10.0, maxval=50.0)
 
-    completion_mask = jnp.zeros_like(rewards).astype(jnp.bool_)
-    completion_mask = completion_mask.at[jnp.arange(BATCH_SIZE), -1].set(jax.random.bernoulli(keys[2], p=0.5, shape=(BATCH_SIZE,)).astype(jnp.bool_))
-    print("completion mask\n", completion_mask.astype(jnp.int32))
-    continuation_mask = jnp.ones_like(completion_mask).astype(jnp.bool_)
+    completion_mask = jax.random.bernoulli(keys[2], p=0.1, shape=(BATCH_SIZE, SEQ_LEN)).astype(jnp.bool_)
+    continuation_mask = jax.random.bernoulli(keys[3], p=0.9, shape=(BATCH_SIZE, SEQ_LEN)).astype(jnp.bool_) & ~completion_mask
 
     q = jax.random.uniform(keys[4], (BATCH_SIZE, SEQ_LEN), minval=10.0, maxval=50.0)
 
     action_chunk_size = 1
-    action_chunk_eval_interval = 2
+    action_chunk_eval_interval = 1
     eval_chunk_start_idx = jnp.arange(0, rewards.shape[1], action_chunk_size * action_chunk_eval_interval)
     q = q[:, eval_chunk_start_idx]
     eval_chunk_end_idx = eval_chunk_start_idx + action_chunk_size - 1
-    print("q")
-    print(q)
     q_a_star_next = q_a_star_next[:, eval_chunk_end_idx]
-    print("q_a_star_next")
-    print(q_a_star_next)
+
+    # add critic dim
+    q = jnp.expand_dims(q, axis=0)  # (1, batch, eval_chunk)
 
     loss = get_lql_critic_loss(
         q,
@@ -498,4 +531,4 @@ if __name__ == "__main__":
         action_chunk_size=action_chunk_size,
         action_chunk_eval_interval=action_chunk_eval_interval,
     )
-    print("LQL loss", loss)
+    print("LQL loss", loss[0])
