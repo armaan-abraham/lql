@@ -126,7 +126,8 @@ class TDnAgent(flax.struct.PyTreeNode):
             bc_loss = -log_probs_mean
 
             # Q loss
-            q_loss = -self.network.select('critic')(observations, actions=actor_actions).mean()
+            q = self.network.select('critic')(observations, actions=actor_actions)
+            q_loss = -q.mean()
             # Actor entropy maximization loss
             entropy_max_loss = (log_probs * self.network.select('alpha')()).mean()
 
@@ -145,6 +146,7 @@ class TDnAgent(flax.struct.PyTreeNode):
             return actor_loss, {
                 'bc_loss': bc_loss,
                 'q_loss': q_loss,
+                'q': q.mean(),
                 'entropy_max_loss': entropy_max_loss,
                 'alpha_loss': alpha_loss,
                 'alpha': alpha,
