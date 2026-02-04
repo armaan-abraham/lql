@@ -304,7 +304,7 @@ def get_lql_critic_loss(
         rewards,
         discount,
     )
-    assert utils_to_seq_end.dtype == jnp.float64
+    assert jnp.issubdtype(utils_to_seq_end.dtype, jnp.floating)
 
     chunk_utils, chunk_valids, chunk_completion_mask, chunk_continuation_mask = get_chunk_utils(
         rewards,
@@ -314,7 +314,7 @@ def get_lql_critic_loss(
         discount,
         action_chunk_size,
     )
-    assert chunk_utils.dtype == jnp.float64
+    assert jnp.issubdtype(chunk_utils.dtype, jnp.floating)
     assert chunk_valids.dtype == jnp.bool
     assert chunk_completion_mask.dtype == jnp.bool
 
