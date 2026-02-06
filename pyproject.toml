@@ -3,7 +3,7 @@ name = "lql"
 version = "0.1.0"
 description = "Long-horizon Q-learning: Accurate Value Learning with n-step Inequalities"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "beartype",
     "flax",
@@ -11,7 +11,19 @@ dependencies = [
     "jaxtyping",
     "pytest",
     "einops",
+    "tqdm>=4.67.3",
+    "wandb>=0.24.2",
+    "ml-collections>=1.1.0",
+    "pillow>=12.1.0",
+    "gymnasium>=1.2.3",
+    "ogbench>=1.2.1",
+    "h5py>=3.15.1",
+    "robomimic>=0.3.0",
+    "distrax>=0.1.7",
 ]
+
+[project.optional-dependencies]
+cuda = ["jax[cuda12]"]
 
 [build-system]
 requires = ["hatchling"]

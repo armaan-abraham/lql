@@ -26,7 +26,6 @@ class TDnAgent(flax.struct.PyTreeNode):
         assert batch['observations'].ndim == 3 # [batch, seq_len, obs_dim]
         assert batch['actions'].ndim == 3 # [batch, seq_len, act_dim]
         assert batch['rewards'].ndim == 2 # [batch, seq_len]
-        assert batch['utils'].ndim == 2 # [batch, seq_len]
         assert batch['masks'].ndim == 2 # [batch, seq_len]
         assert batch['terminals'].ndim == 2 # [batch, seq_len]
         assert batch['observations'].shape[0:2] == batch['actions'].shape[0:2] == batch['rewards'].shape[0:2] == batch['masks'].shape[0:2] == batch['terminals'].shape[0:2]

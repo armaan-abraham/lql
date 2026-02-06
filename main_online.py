@@ -14,6 +14,8 @@ from lql.evaluation import evaluate
 from lql.agents import agents
 import numpy as np
 
+os.environ.setdefault("MUJOCO_GL", "egl")
+
 if 'CUDA_VISIBLE_DEVICES' in os.environ:
     os.environ['EGL_DEVICE_ID'] = os.environ['CUDA_VISIBLE_DEVICES']
     os.environ['MUJOCO_EGL_DEVICE_ID'] = os.environ['CUDA_VISIBLE_DEVICES']
