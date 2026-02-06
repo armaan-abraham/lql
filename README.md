@@ -29,7 +29,7 @@ python main.py --env_name=cube-triple-play-singletask-task2-v0 --horizon_length=
 
 ### FQL
 
-See Best-of-N, using `--agent.actor_type=fql`.
+See Best-of-N, using `--agent.actor_type=fql` and setting `--agent.alpha`.
 
 ### Gaussian
 ```
