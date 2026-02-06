@@ -12,6 +12,7 @@ from einops import repeat, reduce
 from lql.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
 from lql.utils.networks import ActorVectorField, Value, MLP
 from lql.utils.rlpd_utils import TanhNormal, Temperature
+from lql.utils.critic_loss import get_tdn_critic_loss
 
 class TDnAgent(flax.struct.PyTreeNode):
     """TD-n agent."""
@@ -41,14 +42,14 @@ class TDnAgent(flax.struct.PyTreeNode):
         q_ens = self.network.select('critic')(batch['observations'][:, 0], actions=batch['actions'][:, 0], params=grad_params)
         assert q_ens.shape == (self.config['num_critics'], batch_size)
 
-        utils_n = batch['utils'][:, -1]
-        assert utils_n.shape == (batch_size,)
-        target_q = utils_n + \
-            (self.config['discount'] ** self.config['horizon_length']) * batch['masks'][..., -1] * q_a_star_next
-
-        q_loss_ens = (jnp.square(q_ens - target_q) * batch['valid'][..., -1])
-        assert q_loss_ens.shape == (self.config['num_critics'], batch_size)
-        q_loss = q_loss_ens.mean()
+        q_loss, q_loss_info = get_tdn_critic_loss(
+            q_ens,
+            q_a_star_next,
+            batch['rewards'],
+            batch['masks'],
+            batch['terminals'],
+            self.config['discount'],
+        )
 
         return q_loss, {
             'critic_loss': q_loss,
@@ -60,6 +61,7 @@ class TDnAgent(flax.struct.PyTreeNode):
             'q_a_star_next_std': q_a_star_next.std(),
             'q_a_star_next_max': q_a_star_next.max(),
             'q_a_star_next_min': q_a_star_next.min(),
+            **q_loss_info,
         }
 
     def actor_loss(self, batch, grad_params, rng):
@@ -162,33 +164,8 @@ class TDnAgent(flax.struct.PyTreeNode):
         """Compute the total loss."""
         info = {}
         rng = rng if rng is not None else self.rng
-
-        batch_size = batch['observations'].shape[0]
-        sequence_length = self.config['horizon_length']
-
         rng, actor_rng, critic_rng = jax.random.split(rng, 3)
 
-        utils = jnp.zeros((batch_size, sequence_length), dtype=float)
-        masks = jnp.ones((batch_size, sequence_length), dtype=float)
-        terminals = jnp.zeros((batch_size, sequence_length), dtype=float)
-        valid = jnp.ones((batch_size, sequence_length), dtype=float)
-
-        utils = utils.at[:, 0].set(batch['rewards'][:, 0].squeeze())
-        masks = masks.at[:, 0].set(batch['masks'][:, 0].squeeze())
-        terminals = terminals.at[:, 0].set(batch['terminals'][:, 0].squeeze())
-
-        discount_powers = self.config['discount'] ** jnp.arange(sequence_length)
-
-        for i in range(1, sequence_length):
-            utils = utils.at[:, i].set(utils[:, i-1] + batch['rewards'][:, i].squeeze() * discount_powers[i])
-            masks = masks.at[:, i].set(jnp.minimum(masks[:, i-1], batch['masks'][:, i].squeeze()))
-            terminals = terminals.at[:, i].set(jnp.maximum(terminals[:, i-1], batch['terminals'][:, i].squeeze()))
-            valid = valid.at[:, i].set(1.0 - terminals[:, i-1])
-
-        batch['utils'] = utils
-        batch['masks'] = masks
-        batch['terminals'] = terminals
-        batch['valid'] = valid
         assert batch['observations'].ndim == 3  # (batch_size, sequence_length, ob_dim)
 
         critic_loss, critic_info = self.critic_loss(batch, grad_params, critic_rng)
