@@ -7,6 +7,9 @@ This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 uv sync                # CPU
 uv sync --extra cuda   # GPU
 ```
+```bash
+. .venv/bin/activate
+```
 
 ## Run
 
