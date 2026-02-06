@@ -114,14 +114,7 @@ def get_hinge_loss_for_critic(
     discount: float,
     action_chunk_size: int,
     action_chunk_eval_interval: int,
-) -> Tuple[
-        # Lower bound terms and denominator
-        Float[Array, 'batch eval_chunk eval_chunk'],
-        Int[Array, ''],
-        # Upper bound terms and denominator
-        Float[Array, 'batch eval_chunk eval_chunk'],
-        Int[Array, ''],
-    ]:
+) -> Tuple[Float[Array, ''], Dict]:
     """
     q and v_next are expected to be provided for each eval chunk (q at chunk
     start and v_next at chunk end).
@@ -206,6 +199,7 @@ def get_hinge_loss_for_critic(
         0.0,
     ) ** 2 * lower_bound_diffs_valid
     lower_bound_denom = jnp.maximum(jnp.sum(lower_bound_diffs_valid.astype(jnp.int32)), 1)
+    lower_bound_loss = jnp.sum(lower_bound_errors) / lower_bound_denom
 
     # Compute upper bound loss by comparing later q values to earlier v_next values.
 
@@ -247,8 +241,14 @@ def get_hinge_loss_for_critic(
         0.0,
     ) ** 2 * upper_bound_diffs_valid
     upper_bound_denom = jnp.maximum(jnp.sum(upper_bound_diffs_valid.astype(jnp.int32)), 1)
+    upper_bound_loss = jnp.sum(upper_bound_errors) / upper_bound_denom
 
-    return lower_bound_errors, lower_bound_denom, upper_bound_errors, upper_bound_denom
+    return lower_bound_loss + upper_bound_loss, {
+        "lower_bound_loss": lower_bound_loss,
+        "upper_bound_loss": upper_bound_loss,
+        "num_valid_lower_bound_terms": lower_bound_denom,
+        "num_valid_upper_bound_terms": upper_bound_denom,
+    }
 
 @jaxtyped(typechecker=beartype)
 def get_hinge_loss(
@@ -265,9 +265,8 @@ def get_hinge_loss(
 ) -> Tuple[Float[Array, ''], Dict]:
     num_critics, batch_size, num_eval_chunks = q.shape
 
-
     # vmap across ensemble dimension
-    lower_bound_errors, lower_bound_denom, upper_bound_errors, upper_bound_denom = jax.vmap(
+    loss_per_critic, info_per_critic = jax.vmap(
         get_hinge_loss_for_critic,
         in_axes=(0, None, None, None, None, None, None, None, None, None),
     )(
@@ -282,20 +281,10 @@ def get_hinge_loss(
         action_chunk_size,
         action_chunk_eval_interval,
     )
-    assert lower_bound_errors.shape == (num_critics, batch_size, num_eval_chunks, num_eval_chunks)
-    assert upper_bound_errors.shape == (num_critics, batch_size, num_eval_chunks, num_eval_chunks)
-    assert lower_bound_denom.shape == (num_critics,)
-    assert upper_bound_denom.shape == (num_critics,)
+    assert loss_per_critic.shape == (num_critics,)
+    assert all(v.shape[0] == num_critics for v in info_per_critic.values())
 
-    lower_bound_loss = jnp.sum(lower_bound_errors) / jnp.sum(lower_bound_denom)
-    upper_bound_loss = jnp.sum(upper_bound_errors) / jnp.sum(upper_bound_denom)
-
-    return lower_bound_loss + upper_bound_loss, {
-        "lower_bound_loss": lower_bound_loss,
-        "upper_bound_loss": upper_bound_loss,
-        "num_valid_lower_bound_terms": lower_bound_denom.mean(),
-        "num_valid_upper_bound_terms": upper_bound_denom.mean(),
-    }
+    return jnp.mean(loss_per_critic), jax.tree_util.tree_map(jnp.mean, info_per_critic)
 
 @jaxtyped(typechecker=beartype)
 def get_td_loss(
@@ -496,9 +485,9 @@ if __name__ == "__main__":
     #     ], dtype=jnp.float32
     # )
 
-    # Shape constants
     BATCH_SIZE = 256
-    SEQ_LEN = 1
+    SEQ_LEN = 16
+    NUM_CRITICS = 16
 
     key = jax.random.PRNGKey(42)
     keys = jax.random.split(key, 5)
@@ -509,17 +498,14 @@ if __name__ == "__main__":
     completion_mask = jax.random.bernoulli(keys[2], p=0.1, shape=(BATCH_SIZE, SEQ_LEN)).astype(jnp.bool_)
     continuation_mask = jax.random.bernoulli(keys[3], p=0.9, shape=(BATCH_SIZE, SEQ_LEN)).astype(jnp.bool_) & ~completion_mask
 
-    q = jax.random.uniform(keys[4], (BATCH_SIZE, SEQ_LEN), minval=10.0, maxval=50.0)
+    q = jax.random.uniform(keys[4], (NUM_CRITICS, BATCH_SIZE, SEQ_LEN), minval=10.0, maxval=50.0)
 
     action_chunk_size = 1
     action_chunk_eval_interval = 1
     eval_chunk_start_idx = jnp.arange(0, rewards.shape[1], action_chunk_size * action_chunk_eval_interval)
-    q = q[:, eval_chunk_start_idx]
+    q = q[:, :, eval_chunk_start_idx]
     eval_chunk_end_idx = eval_chunk_start_idx + action_chunk_size - 1
     q_a_star_next = q_a_star_next[:, eval_chunk_end_idx]
-
-    # add critic dim
-    q = jnp.expand_dims(q, axis=0)  # (1, batch, eval_chunk)
 
     loss = get_lql_critic_loss(
         q,
