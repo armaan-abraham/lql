@@ -1,0 +1,18 @@
+[project]
+name = "lql"
+version = "0.1.0"
+description = "Long-horizon Q-learning: Accurate Value Learning with n-step Inequalities"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "beartype",
+    "flax",
+    "jax",
+    "jaxtyping",
+    "pytest",
+    "einops",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

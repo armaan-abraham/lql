@@ -9,3 +9,5 @@ dist/
 .ruff_cache/
 exp/
 .claude/
+.venv/
+.pytest_cache/

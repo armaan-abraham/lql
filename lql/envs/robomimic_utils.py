@@ -13,7 +13,7 @@ import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.obs_utils as ObsUtils
 from robomimic import DATASET_REGISTRY
 
-from utils.datasets import Dataset
+from lql.utils.datasets import Dataset
 
 
 def is_robomimic_env(env_name):

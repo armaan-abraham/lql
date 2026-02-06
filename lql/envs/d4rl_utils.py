@@ -2,8 +2,8 @@ import d4rl
 import gymnasium
 import numpy as np
 
-from envs.env_utils import EpisodeMonitor
-from utils.datasets import Dataset
+from lql.envs.env_utils import EpisodeMonitor
+from lql.utils.datasets import Dataset
 
 
 def make_env(env_name):

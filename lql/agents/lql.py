@@ -9,10 +9,10 @@ import ml_collections
 import optax
 from einops import repeat, rearrange, reduce
 
-from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from utils.networks import ActorVectorField, Value, MLP
-from utils.rlpd_utils import TanhNormal, Temperature
-from agents.lql_util import get_lql_critic_loss
+from lql.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
+from lql.utils.networks import ActorVectorField, Value, MLP
+from lql.utils.rlpd_utils import TanhNormal, Temperature
+from lql.utils.critic_loss import get_lql_critic_loss
 
 class LQLAgent(flax.struct.PyTreeNode):
     """Long-horizon Q-learning (LQL) agent."""

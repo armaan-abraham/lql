@@ -9,9 +9,9 @@ import ml_collections
 import optax
 from einops import repeat, reduce
 
-from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from utils.networks import ActorVectorField, Value, MLP
-from utils.rlpd_utils import TanhNormal, Temperature
+from lql.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
+from lql.utils.networks import ActorVectorField, Value, MLP
+from lql.utils.rlpd_utils import TanhNormal, Temperature
 
 class TDnAgent(flax.struct.PyTreeNode):
     """TD-n agent."""

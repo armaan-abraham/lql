@@ -1,17 +1,17 @@
 import glob, tqdm, wandb, os, json, random, time, jax
 from absl import app, flags
 from ml_collections import config_flags
-from log_utils import setup_wandb, get_exp_name, get_flag_dict, CsvLogger
+from lql.log_utils import setup_wandb, get_exp_name, get_flag_dict, CsvLogger
 
-from envs.env_utils import make_env_and_datasets
-from envs.ogbench_utils import make_ogbench_env_and_datasets
-from envs.robomimic_utils import is_robomimic_env
+from lql.envs.env_utils import make_env_and_datasets
+from lql.envs.ogbench_utils import make_ogbench_env_and_datasets
+from lql.envs.robomimic_utils import is_robomimic_env
 
-from utils.flax_utils import save_agent
-from utils.datasets import Dataset, ReplayBuffer
+from lql.utils.flax_utils import save_agent
+from lql.utils.datasets import Dataset, ReplayBuffer
 
-from evaluation import evaluate
-from agents import agents
+from lql.evaluation import evaluate
+from lql.agents import agents
 import numpy as np
 
 if 'CUDA_VISIBLE_DEVICES' in os.environ:

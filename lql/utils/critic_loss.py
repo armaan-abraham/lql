@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from einops import repeat, rearrange, einsum
 from jaxtyping import Array, Float, Int, jaxtyped, Bool
 from beartype import beartype
-from typing import Tuple, Dict
+from beartype.typing import Tuple, Dict
 
 
 @jaxtyped(typechecker=beartype)
@@ -399,8 +399,8 @@ def get_tdn_critic_loss(
     q: Float[Array, 'critic batch'],
     v_next: Float[Array, 'batch'],
     rewards: Float[Array, 'batch seq'],
-    terminals: Float[Array, 'batch seq'],
     masks: Float[Array, 'batch seq'],
+    terminals: Float[Array, 'batch seq'],
     discount: float,
 ) -> Tuple[Float[Array, ''], Dict]:
 
