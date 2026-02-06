@@ -49,7 +49,8 @@ def get_chunk_utils(
         Bool[Array, 'batch chunk'],
     ]:
     """
-    Compute the utilities from each action chunk start to end.
+    Compute the utilities from each action chunk start (observation at first
+    index in chunk) to end (next_observation at last index in chunk).
     """
     batch_size, seq_len = rewards.shape
     assert utils_to_seq_end.shape == (batch_size, seq_len + 1)
@@ -392,6 +393,57 @@ def get_lql_critic_loss(
         info[f"hinge_loss/{k}"] = v
 
     return td_loss + hinge_loss * hinge_loss_weight, info
+
+@jaxtyped(typechecker=beartype)
+def get_tdn_critic_loss(
+    q: Float[Array, 'critic batch'],
+    v_next: Float[Array, 'batch'],
+    rewards: Float[Array, 'batch seq'],
+    terminals: Float[Array, 'batch seq'],
+    masks: Float[Array, 'batch seq'],
+    discount: float,
+) -> Tuple[Float[Array, ''], Dict]:
+
+    """ Implementation reused from https://github.com/ColinQiyangLi/qc. """
+    num_critics = q.shape[0]
+    batch_size, seq_len = rewards.shape
+
+    utils = jnp.zeros((batch_size, seq_len), dtype=float)
+    masks_acc = jnp.ones((batch_size, seq_len), dtype=float)
+    terminals_acc = jnp.zeros((batch_size, seq_len), dtype=float)
+    valid_acc = jnp.ones((batch_size, seq_len), dtype=float)
+
+    utils = utils.at[:, 0].set(rewards[:, 0].squeeze())
+    masks_acc = masks_acc.at[:, 0].set(masks[:, 0].squeeze())
+    terminals_acc = terminals_acc.at[:, 0].set(terminals[:, 0].squeeze())
+
+    discount_powers = discount ** jnp.arange(seq_len)
+
+    for i in range(1, seq_len):
+        utils = utils.at[:, i].set(utils[:, i-1] + rewards[:, i].squeeze() * discount_powers[i])
+        masks_acc = masks_acc.at[:, i].set(jnp.minimum(masks_acc[:, i-1], masks[:, i].squeeze()))
+        terminals_acc = terminals_acc.at[:, i].set(jnp.maximum(terminals_acc[:, i-1], terminals[:, i].squeeze()))
+        valid_acc = valid_acc.at[:, i].set(1.0 - terminals_acc[:, i-1])
+
+    utils_n = utils[:, -1]
+    assert utils_n.shape == (batch_size,)
+    target_q = utils_n + \
+        (discount ** seq_len) * masks_acc[..., -1] * v_next
+
+    q_loss_ens = (jnp.square(q - target_q) * valid_acc[..., -1])
+    assert q_loss_ens.shape == (num_critics, batch_size)
+    q_loss = q_loss_ens.mean()
+
+    td_info = {
+        'td_target_mean': target_q.mean(),
+        'num_valid_td_terms': valid_acc[..., -1].sum(),
+    }
+    info = {}
+    for k, v in td_info.items():
+        info[f"td_loss/{k}"] = v
+
+    return q_loss, info
+    
 
 if __name__ == "__main__":
     # Tests
