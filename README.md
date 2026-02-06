@@ -4,11 +4,12 @@
 
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 ```bash
-uv sync                # CPU
-uv sync --extra cuda   # GPU
+uv sync \
+    --extra cuda \   # GPU
+    --extra media    # video rendering
 ```
 ```bash
-. .venv/bin/activate
+source .venv/bin/activate
 ```
 
 ## Run

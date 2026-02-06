@@ -24,6 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda = ["jax[cuda12]"]
+media = ["wandb[media]"]
 
 [build-system]
 requires = ["hatchling"]
