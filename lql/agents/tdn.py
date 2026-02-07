@@ -12,7 +12,7 @@ from einops import repeat, reduce
 from lql.utils.flax_utils import ModuleDict, TrainState, nonpytree_field
 from lql.utils.networks import ActorVectorField, Value, MLP
 from lql.utils.rlpd_utils import TanhNormal, Temperature
-from lql.utils.critic_loss import get_tdn_critic_loss
+from lql.utils.critic_loss import get_tdn_critic_loss, get_tdn_target_q_idx
 
 class TDnAgent(flax.struct.PyTreeNode):
     """TD-n agent."""
@@ -31,10 +31,15 @@ class TDnAgent(flax.struct.PyTreeNode):
         assert batch['observations'].shape[0:2] == batch['actions'].shape[0:2] == batch['rewards'].shape[0:2] == batch['masks'].shape[0:2] == batch['terminals'].shape[0:2]
         batch_size, seq_len = batch['observations'].shape[0:2]
 
+        target_q_obs = batch['next_observations'][
+            jnp.arange(batch_size), 
+            get_tdn_target_q_idx(batch['terminals'])
+        ]
+
         rng, sample_rng = jax.random.split(rng)
-        a_star_next = self.sample_actions(batch['next_observations'][:, -1], rng=sample_rng)
+        a_star_next = self.sample_actions(target_q_obs, rng=sample_rng)
         assert a_star_next.shape == (batch_size, self.config['action_dim'])
-        q_a_star_next_ens = jax.lax.stop_gradient(self.network.select('target_critic')(batch['next_observations'][:, -1], actions=a_star_next))
+        q_a_star_next_ens = jax.lax.stop_gradient(self.network.select('target_critic')(target_q_obs, actions=a_star_next))
         assert q_a_star_next_ens.shape == (self.config['num_critics'], batch_size)
         q_a_star_next = reduce(q_a_star_next_ens, 'ensemble batch -> batch', 'mean')
 

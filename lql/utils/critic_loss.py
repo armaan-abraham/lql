@@ -394,6 +394,20 @@ def get_lql_critic_loss(
 
     return td_loss + hinge_loss * hinge_loss_weight, info
 
+
+@jaxtyped(typechecker=beartype)
+def get_tdn_target_q_idx(
+    terminals: Float[Array, 'batch seq'],
+) -> Int[Array, 'batch']:
+    # Find the first terminal transition in each sequence or the last
+    # transition if no terminal is present.
+    batch_size, seq_len = terminals.shape
+    return jnp.where(
+        jnp.any(terminals, axis=1),
+        jnp.argmax(terminals, axis=1),
+        seq_len - 1,
+    )
+
 @jaxtyped(typechecker=beartype)
 def get_tdn_critic_loss(
     q: Float[Array, 'critic batch'],
@@ -404,43 +418,42 @@ def get_tdn_critic_loss(
     discount: float,
 ) -> Tuple[Float[Array, ''], Dict]:
 
-    """ Implementation reused from https://github.com/ColinQiyangLi/qc. """
+    """ v_next is assumed to be computed at the first terminal
+    next_observation in each sequence, or the last next_observation if no
+    terminal is present """
+
     num_critics = q.shape[0]
     batch_size, seq_len = rewards.shape
 
-    utils = jnp.zeros((batch_size, seq_len), dtype=float)
-    masks_acc = jnp.ones((batch_size, seq_len), dtype=float)
-    terminals_acc = jnp.zeros((batch_size, seq_len), dtype=float)
-    valid_acc = jnp.ones((batch_size, seq_len), dtype=float)
+    # Construct target for TD-n loss by stepping through sequence and
+    # conditionally accumulating
 
-    utils = utils.at[:, 0].set(rewards[:, 0].squeeze())
-    masks_acc = masks_acc.at[:, 0].set(masks[:, 0].squeeze())
-    terminals_acc = terminals_acc.at[:, 0].set(terminals[:, 0].squeeze())
-
-    discount_powers = discount ** jnp.arange(seq_len)
+    td_target = rewards[:, 0].copy()
+    # Whether to stop adding rewards to target
+    target_accum_done = jnp.maximum(1.0 - masks[:, 0], terminals[:, 0])
 
     for i in range(1, seq_len):
-        utils = utils.at[:, i].set(utils[:, i-1] + rewards[:, i].squeeze() * discount_powers[i])
-        masks_acc = masks_acc.at[:, i].set(jnp.minimum(masks_acc[:, i-1], masks[:, i].squeeze()))
-        terminals_acc = terminals_acc.at[:, i].set(jnp.maximum(terminals_acc[:, i-1], terminals[:, i].squeeze()))
-        valid_acc = valid_acc.at[:, i].set(1.0 - terminals_acc[:, i-1])
+        td_target = td_target + rewards[:, i] * (discount ** i) * (1.0 - target_accum_done)
 
-    utils_n = utils[:, -1]
-    assert utils_n.shape == (batch_size,)
-    target_q = utils_n + \
-        (discount ** seq_len) * masks_acc[..., -1] * v_next
+        # If completion or terminal, then we should stop accumulating target
+        target_accum_done = jnp.maximum(
+            jnp.maximum(target_accum_done, 1.0 - masks[:, i]),
+            terminals[:, i],
+        )
 
-    q_loss_ens = (jnp.square(q - target_q) * valid_acc[..., -1])
+    # For completion-less sequences, add bootstrapped value
+    q_target_idx = get_tdn_target_q_idx(terminals) # idx for which next_observation is used
+    # Check for any mask=0
+    seq_masks = jnp.min(masks, axis=1)
+    td_target = td_target + (discount ** (q_target_idx + 1)) * seq_masks * v_next
+
+    q_loss_ens = jnp.square(q - td_target)
     assert q_loss_ens.shape == (num_critics, batch_size)
     q_loss = q_loss_ens.mean()
 
-    td_info = {
-        'td_target_mean': target_q.mean(),
-        'num_valid_td_terms': valid_acc[..., -1].sum(),
+    info = {
+        'td_loss/td_target_mean': td_target.mean(),
     }
-    info = {}
-    for k, v in td_info.items():
-        info[f"td_loss/{k}"] = v
 
     return q_loss, info
     
