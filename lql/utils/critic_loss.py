@@ -428,12 +428,19 @@ def get_tdn_critic_loss(
     # Construct target for TD-n loss by stepping through sequence and
     # conditionally accumulating
 
-    td_target = rewards[:, 0].copy()
+    td_target = jnp.zeros((batch_size,), dtype=float)
     # Whether to stop adding rewards to target
-    target_accum_done = jnp.maximum(1.0 - masks[:, 0], terminals[:, 0])
+    target_accum_done = jnp.zeros((batch_size,), dtype=float)
 
-    for i in range(1, seq_len):
+    q_target_idx = get_tdn_target_q_idx(terminals)
+
+    for i in range(0, seq_len):
         td_target = td_target + rewards[:, i] * (discount ** i) * (1.0 - target_accum_done)
+
+        # If we (a) reach the q target idx (b) it's not a completion, and (c) we haven't
+        # already stopped accumulating: then we should add the bootstrapped
+        # value to the target
+        td_target = td_target + v_next * (discount ** (i + 1)) * (q_target_idx == i) * masks[:, i] * (1.0 - target_accum_done)
 
         # If completion or terminal, then we should stop accumulating target
         target_accum_done = jnp.maximum(
@@ -441,11 +448,6 @@ def get_tdn_critic_loss(
             terminals[:, i],
         )
 
-    # For completion-less sequences, add bootstrapped value
-    q_target_idx = get_tdn_target_q_idx(terminals) # idx for which next_observation is used
-    # Check for any mask=0
-    seq_masks = jnp.min(masks, axis=1)
-    td_target = td_target + (discount ** (q_target_idx + 1)) * seq_masks * v_next
 
     q_loss_ens = jnp.square(q - td_target)
     assert q_loss_ens.shape == (num_critics, batch_size)
