@@ -17,25 +17,6 @@ RETRY_WAIT_SECONDS = 60
 HI_PRIORITY_PARTITION = "iris-hi"
 HI_PRIORITY_MAX_JOBS = 6
 
-JOB_TEMPLATE = """#!/bin/bash
-#SBATCH --job-name=train
-#SBATCH --partition=iris
-#SBATCH --account=iris
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:1
-#SBATCH --constraint="24G|48G"
-#SBATCH --time=12:00:00
-#SBATCH --output=/iris/u/armaana/jobs/logs/%x_%j.out
-#SBATCH --error=/iris/u/armaana/jobs/logs/%x_%j.err
-
-. /iris/u/armaana/qc/.venv/bin/activate
-cd /iris/u/armaana/qc-pastaware
-
-{commands}
-"""
-
 
 def parse_commands_file(filepath: Path) -> list[str]:
     """Parse commands file, splitting on ==== delimiter."""
@@ -154,18 +135,20 @@ def main():
     if not args.commands_file.exists():
         raise FileNotFoundError(f"Commands file not found: {args.commands_file}")
 
+
+    job_template = None
     if args.template:
         if not args.template.exists():
             raise FileNotFoundError(f"Template file not found: {args.template}")
         job_template = args.template.read_text()
-    else:
-        job_template = JOB_TEMPLATE
 
     hi_template = None
     if args.hi_template:
         if not args.hi_template.exists():
             raise FileNotFoundError(f"High priority template not found: {args.hi_template}")
         hi_template = args.hi_template.read_text()
+    
+    assert job_template or hi_template, "At least one of --template or --hi-template must be provided"
 
     command_segments = parse_commands_file(args.commands_file)
     command_segments = expand_all_commands(command_segments)
@@ -180,14 +163,16 @@ def main():
         if hi_template:
             running_hi = count_running_jobs_in_partition(HI_PRIORITY_PARTITION)
             print(f"High priority partition has {running_hi} running jobs")
-            if running_hi < HI_PRIORITY_MAX_JOBS:
+            # If the low priority template is not provided, we submit to hi
+            # regardless of hi queue size
+            if not job_template or running_hi < HI_PRIORITY_MAX_JOBS:
                 print(f"Submitting to high priority partition...")
                 if submit_job(commands, hi_template):
                     idx += 1
                     continue
 
         # Fall back to regular partition
-        if submit_job(commands, job_template):
+        if job_template and submit_job(commands, job_template):
             idx += 1
         else:
             print(f"Waiting {RETRY_WAIT_SECONDS}s before retry...")
