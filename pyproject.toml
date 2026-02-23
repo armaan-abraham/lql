@@ -18,8 +18,10 @@ dependencies = [
     "gymnasium>=1.2.3",
     "ogbench>=1.2.1",
     "h5py>=3.15.1",
-    "robomimic>=0.3.0",
     "distrax>=0.1.7",
+    "diffusers>=0.30",
+    "robomimic @ git+https://github.com/ARISE-Initiative/robomimic.git",
+    "robosuite>=1.5.1",
 ]
 
 [project.optional-dependencies]
@@ -29,3 +31,9 @@ media = ["wandb[media]"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+override-dependencies = ["diffusers>=0.30"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
