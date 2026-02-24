@@ -33,7 +33,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv]
-override-dependencies = ["diffusers>=0.30"]
+override-dependencies = ["diffusers>=0.30", "egl-probe; sys_platform == 'linux'"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
