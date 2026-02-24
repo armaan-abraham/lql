@@ -212,6 +212,11 @@ def make_ogbench_env_and_datasets(
             if k in val_dataset:
                 del val_dataset[k]
 
+    # Clip dataset actions.
+    action_clip_eps = 1e-5
+    train_dataset['actions'] = np.clip(train_dataset['actions'], -1 + action_clip_eps, 1 - action_clip_eps)
+    val_dataset['actions'] = np.clip(val_dataset['actions'], -1 + action_clip_eps, 1 - action_clip_eps)
+
     if dataset_only:
         return train_dataset, val_dataset
     else:
