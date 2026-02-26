@@ -38,6 +38,10 @@ class Dataset(FrozenDict):
         self.terminal_locs = np.nonzero(self['terminals'] > 0)[0]
         self.initial_locs = np.concatenate([[0], self.terminal_locs[:-1] + 1])
 
+        # Print the number of terminals and completions
+        num_completions = len(np.nonzero(self['masks'] < 1)[0])
+        print(f"Number of terminals: {len(self.terminal_locs)}, number of completions: {num_completions}")
+
     def sample_contiguous(self, batch_size, sequence_length):
         """Sample a batch of sequences, possibly crossing episode boundaries."""
 
