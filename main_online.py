@@ -38,8 +38,6 @@ flags.DEFINE_integer('start_training', 5000, 'when does training start')
 
 flags.DEFINE_integer('utd_ratio', 1, "update to data ratio")
 
-flags.DEFINE_float('discount', 0.99, 'discount factor')
-
 flags.DEFINE_integer('eval_episodes', 50, 'Number of evaluation episodes.')
 flags.DEFINE_integer('video_episodes', 0, 'Number of video episodes for each task.')
 flags.DEFINE_integer('video_frame_skip', 3, 'Frame skip for videos.')
@@ -103,7 +101,6 @@ def main(_):
     online_rng, rng = jax.random.split(jax.random.PRNGKey(FLAGS.seed), 2)
     log_step = 0
     
-    discount = FLAGS.discount
     config["horizon_length"] = FLAGS.horizon_length
 
     # handle dataset
