@@ -1,4 +1,4 @@
-import glob, tqdm, wandb, os, json, random, time, jax
+import glob, tqdm, wandb, os, json, random, time, jax, sys
 from absl import app, flags
 from ml_collections import config_flags
 from lql.log_utils import setup_wandb, get_exp_name, get_flag_dict, CsvLogger, get_wandb_video
@@ -14,11 +14,12 @@ from lql.evaluation import evaluate
 from lql.agents import agents
 import numpy as np
 
-os.environ.setdefault("MUJOCO_GL", "egl")
+if sys.platform == "linux":
+    os.environ.setdefault("MUJOCO_GL", "egl")
 
-if 'CUDA_VISIBLE_DEVICES' in os.environ:
-    os.environ['EGL_DEVICE_ID'] = os.environ['CUDA_VISIBLE_DEVICES']
-    os.environ['MUJOCO_EGL_DEVICE_ID'] = os.environ['CUDA_VISIBLE_DEVICES']
+    if 'CUDA_VISIBLE_DEVICES' in os.environ:
+        os.environ['EGL_DEVICE_ID'] = os.environ['CUDA_VISIBLE_DEVICES']
+        os.environ['MUJOCO_EGL_DEVICE_ID'] = os.environ['CUDA_VISIBLE_DEVICES']
 
 FLAGS = flags.FLAGS
 
