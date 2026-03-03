@@ -41,7 +41,7 @@ class TDnAgent(flax.struct.PyTreeNode):
         assert a_star_next.shape == (batch_size, self.config['action_dim'])
         q_a_star_next_ens = jax.lax.stop_gradient(self.network.select('target_critic')(target_q_obs, actions=a_star_next))
         assert q_a_star_next_ens.shape == (self.config['num_critics'], batch_size)
-        q_a_star_next = reduce(q_a_star_next_ens, 'ensemble batch -> batch', 'mean')
+        q_a_star_next = reduce(q_a_star_next_ens, 'ensemble batch -> batch', self.config['q_agg'])
 
         q_ens = self.network.select('critic')(batch['observations'][:, 0], actions=batch['actions'][:, 0], params=grad_params)
         assert q_ens.shape == (self.config['num_critics'], batch_size)
@@ -377,6 +377,7 @@ def get_config():
             critic_hidden_dims=(512, 512, 512, 512),
             num_critics=2,
             layer_norm=True,  # Whether to use layer normalization for the critic.
+            q_agg='mean',  # Q ensemble aggregation: 'mean' or 'min'.
 
             # Actor
             actor_type='best-of-n',

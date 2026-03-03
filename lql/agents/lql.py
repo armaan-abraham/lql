@@ -42,7 +42,7 @@ class LQLAgent(flax.struct.PyTreeNode):
         assert a_star_next.shape == (batch_size, self.config['num_eval_chunks_per_seq'], self.config['action_chunk_dim'])
         q_a_star_next_ens = jax.lax.stop_gradient(self.network.select('target_critic')(batch_select['next_observations'], actions=a_star_next))
         assert q_a_star_next_ens.shape == (self.config['num_critics'], batch_size, self.config['num_eval_chunks_per_seq'])
-        q_a_star_next = reduce(q_a_star_next_ens, 'ensemble batch chunk -> batch chunk', 'mean')
+        q_a_star_next = reduce(q_a_star_next_ens, 'ensemble batch chunk -> batch chunk', self.config['q_agg'])
 
         q_ens = self.network.select('critic')(batch_select['observations'], actions=batch_select['action_chunks'], params=grad_params)
         assert q_ens.shape == (self.config['num_critics'], batch_size, self.config['num_eval_chunks_per_seq'])
@@ -464,6 +464,7 @@ def get_config():
             num_critics=2,
             layer_norm=True,  # Whether to use layer normalization for the critic.
             hinge_loss_weight=1.0,  # Weight for the lql hinge loss.
+            q_agg='mean',  # Q ensemble aggregation: 'mean' or 'min'.
 
             # Actor
             actor_type='best-of-n',
