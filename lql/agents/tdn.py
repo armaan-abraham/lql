@@ -150,6 +150,7 @@ class TDnAgent(flax.struct.PyTreeNode):
             )
 
             return actor_loss, {
+                'actor_loss': actor_loss,
                 'bc_loss': bc_loss,
                 'q_loss': q_loss,
                 'q': q.mean(),
