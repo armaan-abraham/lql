@@ -31,7 +31,7 @@ flags.DEFINE_string('env_name', 'cube-triple-play-singletask-task2-v0', 'Environ
 flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
 
 flags.DEFINE_integer('online_steps', 2000000, 'Number of online steps.')
-flags.DEFINE_integer('buffer_size', 1000000, 'Replay buffer size.')
+flags.DEFINE_integer('buffer_size', 2000000, 'Replay buffer size.')
 flags.DEFINE_integer('log_interval', 5000, 'Logging interval.')
 flags.DEFINE_integer('eval_interval', 100000, 'Evaluation interval.')
 flags.DEFINE_integer('save_interval', -1, 'Save interval.')
