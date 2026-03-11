@@ -16,6 +16,7 @@ from pathlib import Path
 RETRY_WAIT_SECONDS = 60
 HI_PRIORITY_PARTITION = "iris-hi"
 HI_PRIORITY_MAX_JOBS = 6
+DEFAULT_JOB_LOG_DIR = Path("/iris/u/armaana/jobs/content")
 
 
 def parse_commands_file(filepath: Path) -> list[str]:
@@ -76,7 +77,7 @@ def count_running_jobs_in_partition(partition: str) -> int:
     return len(lines)
 
 
-def submit_job(commands: str, template: str) -> bool:
+def submit_job(commands: str, template: str, job_log_dir: Path) -> bool:
     """
     Attempt to submit a job with the given commands.
     Returns True if successful, False if hit QOS limit.
@@ -96,7 +97,13 @@ def submit_job(commands: str, template: str) -> bool:
         )
 
         if result.returncode == 0:
-            print(f"Submitted job: {result.stdout.strip()}")
+            output = result.stdout.strip()
+            print(f"Submitted job: {output}")
+            # Extract job ID and save job content
+            # sbatch output format: "Submitted batch job 123456"
+            job_id = output.split()[-1]
+            job_log_dir.mkdir(parents=True, exist_ok=True)
+            (job_log_dir / f"{job_id}.txt").write_text(job_script)
             return True
 
         stderr = result.stderr
@@ -129,6 +136,22 @@ def main():
         "--hi-template",
         type=Path,
         help="Path to high priority job template file for iris-hi partition",
+    )
+    parser.add_argument(
+        "--job-log-dir",
+        type=Path,
+        default=DEFAULT_JOB_LOG_DIR,
+        help=f"Directory to save submitted job scripts (default: {DEFAULT_JOB_LOG_DIR})",
+    )
+    parser.add_argument(
+        "--hi-mode",
+        choices=["cap", "all"],
+        default="cap",
+        help=(
+            "When only --hi-template is provided: "
+            "'cap' (default) only submits if fewer than {} hi jobs are running, "
+            "'all' submits all jobs to hi regardless of queue size"
+        ).format(HI_PRIORITY_MAX_JOBS),
     )
     args = parser.parse_args()
 
@@ -163,16 +186,21 @@ def main():
         if hi_template:
             running_hi = count_running_jobs_in_partition(HI_PRIORITY_PARTITION)
             print(f"High priority partition has {running_hi} running jobs")
-            # If the low priority template is not provided, we submit to hi
-            # regardless of hi queue size
-            if not job_template or running_hi < HI_PRIORITY_MAX_JOBS:
+            hi_under_cap = running_hi < HI_PRIORITY_MAX_JOBS
+            # When both templates: use hi if under cap, else fall back to regular.
+            # When only hi template: depends on --hi-mode.
+            if job_template:
+                use_hi = hi_under_cap
+            else:
+                use_hi = True if args.hi_mode == "all" else hi_under_cap
+            if use_hi:
                 print(f"Submitting to high priority partition...")
-                if submit_job(commands, hi_template):
+                if submit_job(commands, hi_template, args.job_log_dir):
                     idx += 1
                     continue
 
         # Fall back to regular partition
-        if job_template and submit_job(commands, job_template):
+        if job_template and submit_job(commands, job_template, args.job_log_dir):
             idx += 1
         else:
             print(f"Waiting {RETRY_WAIT_SECONDS}s before retry...")
