@@ -39,6 +39,8 @@ class ReplayBuffer(flax.struct.PyTreeNode):
     max_size: int = flax.struct.field(pytree_node=False)
     prev_was_terminal: jax.Array
 
+    on_gpu: bool = flax.struct.field(pytree_node=False)
+
     @classmethod
     def create(cls, transition, max_size, device=None):
         """Create an empty buffer on the given device.
@@ -57,9 +59,11 @@ class ReplayBuffer(flax.struct.PyTreeNode):
         pointer = jax.device_put(jnp.int32(0), device)
         size = jax.device_put(jnp.int32(0), device)
         prev_was_terminal = jax.device_put(jnp.bool_(True), device)
+        on_gpu = device is not None and device.platform != 'cpu'
         return cls(
             data=data, pointer=pointer, size=size,
             max_size=max_size, prev_was_terminal=prev_was_terminal,
+            on_gpu=on_gpu,
         )
 
     @classmethod
@@ -84,9 +88,11 @@ class ReplayBuffer(flax.struct.PyTreeNode):
         pointer = jax.device_put(jnp.int32(fill_size % max_size), device)
         size = jax.device_put(jnp.int32(fill_size), device)
         prev_was_terminal = jax.device_put(jnp.bool_(True), device)
+        on_gpu = device is not None and device.platform != 'cpu'
         return cls(
             data=data, pointer=pointer, size=size,
             max_size=max_size, prev_was_terminal=prev_was_terminal,
+            on_gpu=on_gpu,
         )
 
     @partial(jax.jit, donate_argnums=(0,))
@@ -118,14 +124,29 @@ class ReplayBuffer(flax.struct.PyTreeNode):
             prev_was_terminal=jnp.bool_(this_true_terminal),
         )
 
-    @partial(jax.jit, static_argnums=(2, 3))
     def sample_contiguous(self, key, batch_size, sequence_length):
-        """Sample contiguous sequences."""
+        """Sample contiguous sequences. Dispatches to numpy (CPU) or JIT (GPU)."""
+        if self.on_gpu:
+            return self._sample_jit(key, batch_size, sequence_length)
+        return self._sample_numpy(batch_size, sequence_length)
+
+    @partial(jax.jit, static_argnums=(2, 3))
+    def _sample_jit(self, key, batch_size, sequence_length):
         idxs = jax.random.randint(key, (batch_size,), 0, self.size - sequence_length)
         offsets = jnp.arange(sequence_length)
         all_idxs = (idxs[:, None] + offsets[None, :]).flatten()
 
         def fetch_and_reshape(arr):
             return arr[all_idxs].reshape(batch_size, sequence_length, *arr.shape[1:])
+
+        return jax.tree.map(fetch_and_reshape, self.data)
+
+    def _sample_numpy(self, batch_size, sequence_length):
+        size = int(self.size)
+        idxs = np.random.randint(size - sequence_length, size=batch_size)
+        all_idxs = (idxs[:, None] + np.arange(sequence_length)[None, :]).flatten()
+
+        def fetch_and_reshape(arr):
+            return np.asarray(arr)[all_idxs].reshape(batch_size, sequence_length, *arr.shape[1:])
 
         return jax.tree.map(fetch_and_reshape, self.data)

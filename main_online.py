@@ -259,8 +259,9 @@ def main(_):
             replay_batch = replay_buffer.sample_contiguous(sk2, FLAGS.utd_ratio * config['batch_size'] // 2,
                 FLAGS.horizon_length)
 
+            cat_fn = jnp.concatenate if FLAGS.gpu_buffer else np.concatenate
             batch = jax.tree.map(
-                lambda d, r: jnp.concatenate([
+                lambda d, r: cat_fn([
                     d.reshape((FLAGS.utd_ratio, config["batch_size"] // 2) + d.shape[1:]),
                     r.reshape((FLAGS.utd_ratio, config["batch_size"] // 2) + r.shape[1:]),
                 ], axis=1),
