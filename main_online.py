@@ -54,7 +54,7 @@ flags.DEFINE_integer('horizon_length', 5, 'Number of transitions sampled in each
 flags.DEFINE_bool('sparse', False, "make the task sparse reward")
 
 flags.DEFINE_bool('save_all_online_states', False, "save all trajectories to npy")
-flags.DEFINE_bool('gpu_buffer', False, 'Store replay buffer on GPU')
+flags.DEFINE_bool('jit_buffer', False, 'JIT-compile replay buffer operations')
 
 class LoggingHelper:
     def __init__(self, csv_loggers, wandb_logger):
@@ -139,10 +139,9 @@ def main(_):
     
     train_dataset = process_train_dataset(train_dataset)
 
-    # Create JAX buffer from dataset
-    buffer_device = jax.devices('gpu')[0] if FLAGS.gpu_buffer else jax.devices('cpu')[0]
+    # Create buffer from dataset
     train_buffer = ReplayBuffer.create_from_initial_dataset(
-        dict(train_dataset), max_size=train_dataset.size, device=buffer_device,
+        dict(train_dataset), max_size=train_dataset.size, jit_data=FLAGS.jit_buffer,
     )
     sample_rng = jax.random.PRNGKey(FLAGS.seed + 100)
     sample_rng, sk = jax.random.split(sample_rng)
@@ -169,7 +168,7 @@ def main(_):
 
     # Create online replay buffer (empty)
     example_transition = jax.tree.map(lambda x: x[0], train_buffer.data)
-    replay_buffer = ReplayBuffer.create(example_transition, max_size=FLAGS.buffer_size, device=buffer_device)
+    replay_buffer = ReplayBuffer.create(example_transition, max_size=FLAGS.buffer_size, jit_data=FLAGS.jit_buffer)
         
     ob, _ = env.reset()
     
@@ -239,10 +238,6 @@ def main(_):
             masks=1.0 - terminated,
             next_observations=next_ob,
         )
-        transition = jax.tree.map(
-            lambda x: jax.device_put(np.asarray(x, dtype=np.float32), buffer_device),
-            transition,
-        )
         replay_buffer = replay_buffer.add_transition(transition)
         
         # done
@@ -259,7 +254,7 @@ def main(_):
             replay_batch = replay_buffer.sample_contiguous(sk2, FLAGS.utd_ratio * config['batch_size'] // 2,
                 FLAGS.horizon_length)
 
-            cat_fn = jnp.concatenate if FLAGS.gpu_buffer else np.concatenate
+            cat_fn = jnp.concatenate if FLAGS.jit_buffer else np.concatenate
             batch = jax.tree.map(
                 lambda d, r: cat_fn([
                     d.reshape((FLAGS.utd_ratio, config["batch_size"] // 2) + d.shape[1:]),
@@ -304,7 +299,7 @@ def main(_):
             )
             train_dataset = process_train_dataset(train_dataset)
             train_buffer = ReplayBuffer.create_from_initial_dataset(
-                dict(train_dataset), max_size=train_dataset.size, device=buffer_device,
+                dict(train_dataset), max_size=train_dataset.size, jit_data=FLAGS.jit_buffer,
             )
 
 
