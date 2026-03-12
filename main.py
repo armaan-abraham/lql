@@ -54,6 +54,7 @@ flags.DEFINE_integer('horizon_length', 5, 'Number of transitions sampled in each
 flags.DEFINE_bool('sparse', False, "make the task sparse reward")
 
 flags.DEFINE_bool('save_all_online_states', False, "save all trajectories to npy")
+flags.DEFINE_bool('gpu_buffer', False, 'Store replay buffer on GPU')
 
 class LoggingHelper:
     def __init__(self, csv_loggers, wandb_logger):
@@ -137,8 +138,16 @@ def main(_):
         return ds
     
     train_dataset = process_train_dataset(train_dataset)
-    example_batch = train_dataset.sample_contiguous(config['batch_size'], sequence_length=FLAGS.horizon_length)
-    
+
+    # Create JAX buffer from dataset
+    buffer_device = jax.devices('gpu')[0] if FLAGS.gpu_buffer else jax.devices('cpu')[0]
+    train_buffer = ReplayBuffer.create_from_initial_dataset(
+        dict(train_dataset), max_size=train_dataset.size, device=buffer_device,
+    )
+    sample_rng = jax.random.PRNGKey(FLAGS.seed + 100)
+    sample_rng, sk = jax.random.split(sample_rng)
+    example_batch = train_buffer.sample_contiguous(sk, config['batch_size'], FLAGS.horizon_length)
+
     agent_class = agents[config['agent_name']]
     agent = agent_class.create(
         FLAGS.seed,
@@ -176,8 +185,12 @@ def main(_):
                 cur_env=env,
             )
             train_dataset = process_train_dataset(train_dataset)
+            train_buffer = ReplayBuffer.create_from_initial_dataset(
+                dict(train_dataset), max_size=train_dataset.size, device=buffer_device,
+            )
 
-        batch = train_dataset.sample_contiguous(config['batch_size'], sequence_length=FLAGS.horizon_length)
+        sample_rng, sk = jax.random.split(sample_rng)
+        batch = train_buffer.sample_contiguous(sk, config['batch_size'], FLAGS.horizon_length)
 
         agent, offline_info = agent.update(batch)
 
@@ -206,7 +219,8 @@ def main(_):
 
     # transition from offline to online
     replay_buffer = ReplayBuffer.create_from_initial_dataset(
-        dict(train_dataset), size=max(FLAGS.buffer_size, train_dataset.size + 1)
+        dict(train_dataset), max_size=max(FLAGS.buffer_size, train_dataset.size + 1),
+        device=buffer_device,
     )
         
     ob, _ = env.reset()
@@ -274,7 +288,11 @@ def main(_):
             masks=1.0 - terminated,
             next_observations=next_ob,
         )
-        replay_buffer.add_transition(transition)
+        transition = jax.tree.map(
+            lambda x: jax.device_put(np.asarray(x, dtype=np.float32), buffer_device),
+            transition,
+        )
+        replay_buffer = replay_buffer.add_transition(transition)
         
         # done
         if done:
@@ -284,8 +302,9 @@ def main(_):
             ob = next_ob
 
         if i >= FLAGS.start_training:
-            batch = replay_buffer.sample_contiguous(config['batch_size'] * FLAGS.utd_ratio, 
-                        sequence_length=FLAGS.horizon_length)
+            sample_rng, sk = jax.random.split(sample_rng)
+            batch = replay_buffer.sample_contiguous(sk, config['batch_size'] * FLAGS.utd_ratio,
+                        FLAGS.horizon_length)
             batch = jax.tree.map(lambda x: x.reshape((
                 FLAGS.utd_ratio, config["batch_size"]) + x.shape[1:]), batch)
 

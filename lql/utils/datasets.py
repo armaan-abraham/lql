@@ -1,5 +1,6 @@
 from functools import partial
 
+import flax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -11,141 +12,120 @@ def get_size(data):
     sizes = jax.tree_util.tree_map(lambda arr: len(arr), data)
     return max(jax.tree_util.tree_leaves(sizes))
 
+
 class Dataset(FrozenDict):
-    """Dataset class."""
+    """Lightweight dataset container for data loading."""
 
     @classmethod
-    def create(cls, freeze=True, **fields):
-        """Create a dataset from the fields.
-
-        Args:
-            freeze: Whether to freeze the arrays.
-            **fields: Keys and values of the dataset.
-        """
+    def create(cls, **fields):
         data = fields
         assert 'observations' in data
-        if freeze:
-            jax.tree_util.tree_map(lambda arr: arr.setflags(write=False), data)
         return cls(data)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.size = get_size(self._dict)
-        self.frame_stack = None  # Number of frames to stack; set outside the class.
-        self.return_next_actions = False  # Whether to additionally return next actions; set outside the class.
 
-        # Compute terminal and initial locations.
-        self.terminal_locs = np.nonzero(self['terminals'] > 0)[0]
-        self.initial_locs = np.concatenate([[0], self.terminal_locs[:-1] + 1])
 
-        # Print the number of terminals and completions
-        num_completions = len(np.nonzero(self['masks'] < 1)[0])
-        print(f"Number of terminals: {len(self.terminal_locs)}, number of completions: {num_completions}")
+class ReplayBuffer(flax.struct.PyTreeNode):
+    """Replay buffer stored as JAX arrays.
 
-    def sample_contiguous(self, batch_size, sequence_length):
-        """Sample a batch of sequences, possibly crossing episode boundaries."""
+    Sampling and insertion are JIT-compiled. The buffer is a valid pytree
+    and can be passed into/out of JIT-compiled functions.
+    """
+    data: dict
+    pointer: jax.Array
+    size: jax.Array
+    max_size: int = flax.struct.field(pytree_node=False)
+    prev_was_terminal: jax.Array
 
-        # Sample sequence starting locations
-        idxs = np.random.randint(self.size - sequence_length, size=batch_size)
+    @classmethod
+    def create(cls, transition, max_size, device=None):
+        """Create an empty buffer on the given device.
 
-        # Compute remaining indices for all sequences
-        all_idxs = idxs[:, None] + np.arange(sequence_length)[None, :]  # (batch_size, sequence_length)
-        all_idxs = all_idxs.flatten() 
+        Args:
+            transition: Example transition dict (numpy or JAX arrays, unbatched).
+            max_size: Buffer capacity.
+            device: Target device.
+        """
+        def make_buf(example):
+            example = np.asarray(example)
+            buf = np.zeros((max_size, *example.shape), dtype=example.dtype)
+            return jax.device_put(jnp.asarray(buf), device)
 
-        # Batch fetch data to avoid loops
-        batch_observations = self['observations'][all_idxs].reshape(batch_size, sequence_length, *self['observations'].shape[1:])
-        batch_next_observations = self['next_observations'][all_idxs].reshape(batch_size, sequence_length, *self['next_observations'].shape[1:])
-        batch_actions = self['actions'][all_idxs].reshape(batch_size, sequence_length, *self['actions'].shape[1:])
-        batch_rewards = self['rewards'][all_idxs].reshape(batch_size, sequence_length, *self['rewards'].shape[1:])
-        batch_masks = self['masks'][all_idxs].reshape(batch_size, sequence_length, *self['masks'].shape[1:])
-        batch_terminals = self['terminals'][all_idxs].reshape(batch_size, sequence_length, *self['terminals'].shape[1:])
-
-        # Assert next observations are shifted by one timestep for each sequence
-        assert np.all(np.all((batch_next_observations[:, :-1] == batch_observations[:, 1:]), axis=-1) | (batch_terminals[:, :-1] == 1) | (batch_masks[:, :-1] == 0))
-
-        return dict(
-            observations=batch_observations,
-            next_observations=batch_next_observations,
-            actions=batch_actions,
-            masks=batch_masks,
-            rewards=batch_rewards,
-            terminals=batch_terminals,
+        data = jax.tree.map(make_buf, transition)
+        pointer = jax.device_put(jnp.int32(0), device)
+        size = jax.device_put(jnp.int32(0), device)
+        prev_was_terminal = jax.device_put(jnp.bool_(True), device)
+        return cls(
+            data=data, pointer=pointer, size=size,
+            max_size=max_size, prev_was_terminal=prev_was_terminal,
         )
 
-class ReplayBuffer(Dataset):
-    """Replay buffer class.
-
-    This class extends Dataset to support adding transitions.
-    """
-
     @classmethod
-    def create(cls, transition, size):
-        """Create a replay buffer from the example transition.
+    def create_from_initial_dataset(cls, dataset_dict, max_size, device=None):
+        """Create a buffer pre-filled with an existing dataset.
 
         Args:
-            transition: Example transition (dict).
-            size: Size of the replay buffer.
+            dataset_dict: Dict of numpy arrays, each with first dim = num transitions.
+            max_size: Buffer capacity (must be >= initial dataset size).
+            device: Target device.
         """
+        init_size = len(next(iter(dataset_dict.values())))
 
-        def create_buffer(example):
-            example = np.array(example)
-            return np.zeros((size, *example.shape), dtype=example.dtype)
+        fill_size = min(init_size, max_size)
 
-        buffer_dict = jax.tree_util.tree_map(create_buffer, transition)
-        return cls(buffer_dict)
+        def make_buf(init_arr):
+            buf = np.zeros((max_size, *init_arr.shape[1:]), dtype=init_arr.dtype)
+            buf[:fill_size] = init_arr[:fill_size]
+            return jax.device_put(jnp.asarray(buf), device)
 
-    @classmethod
-    def create_from_initial_dataset(cls, init_dataset, size):
-        """Create a replay buffer from the initial dataset.
+        data = jax.tree.map(make_buf, dataset_dict)
+        pointer = jax.device_put(jnp.int32(fill_size % max_size), device)
+        size = jax.device_put(jnp.int32(fill_size), device)
+        prev_was_terminal = jax.device_put(jnp.bool_(True), device)
+        return cls(
+            data=data, pointer=pointer, size=size,
+            max_size=max_size, prev_was_terminal=prev_was_terminal,
+        )
 
-        Args:
-            init_dataset: Initial dataset.
-            size: Size of the replay buffer.
-        """
-
-        def create_buffer(init_buffer):
-            buffer = np.zeros((size, *init_buffer.shape[1:]), dtype=init_buffer.dtype)
-            buffer[: len(init_buffer)] = init_buffer
-            return buffer
-
-        buffer_dict = jax.tree_util.tree_map(create_buffer, init_dataset)
-        dataset = cls(buffer_dict)
-        dataset.size = dataset.pointer = get_size(init_dataset)
-        return dataset
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        self.max_size = get_size(self._dict)
-        self.size = 0
-        self.pointer = 0
-        self.last_transition_true_terminal = True
-
+    @partial(jax.jit, donate_argnums=(0,))
     def add_transition(self, transition):
-        """Add a transition to the replay buffer."""
+        """Add one transition. Returns updated buffer."""
+        this_true_terminal = transition['terminals']
 
-        # When adding transitions online, we need to keep the boundary between
-        # the current episode and the episode after the pointer properly
-        # terminal-separated.
-        this_transition_true_terminal = transition['terminals']
+        # Mark current position as terminal
+        transition = {**transition, 'terminals': jnp.float32(1.0)}
 
-        transition['terminals'] = 1.0
+        # Write transition at pointer
+        new_data = jax.tree.map(
+            lambda buf, val: buf.at[self.pointer].set(val),
+            self.data, transition,
+        )
 
-        def set_idx(buffer, new_element):
-            buffer[self.pointer] = new_element
+        # If previous transition was NOT a true terminal, clear its terminal flag
+        prev_pointer = (self.pointer - 1) % self.max_size
+        prev_terminal_val = jnp.where(self.prev_was_terminal, 1.0, 0.0)
+        new_data['terminals'] = new_data['terminals'].at[prev_pointer].set(prev_terminal_val)
 
-        jax.tree_util.tree_map(set_idx, self._dict, transition)
+        new_pointer = (self.pointer + 1) % self.max_size
+        new_size = jnp.minimum(self.size + 1, self.max_size)
 
-        # If last transition was not a true terminal, we need to set the
-        # terminal flag to 0 for it.
-        if not self.last_transition_true_terminal:
-            prev_pointer = (self.pointer - 1) % self.max_size
-            self._dict['terminals'][prev_pointer] = 0.0
+        return self.replace(
+            data=new_data,
+            pointer=new_pointer,
+            size=new_size,
+            prev_was_terminal=jnp.bool_(this_true_terminal),
+        )
 
-        self.last_transition_true_terminal = this_transition_true_terminal
-        self.pointer = (self.pointer + 1) % self.max_size
-        self.size = max(self.pointer, self.size)
+    @partial(jax.jit, static_argnums=(2, 3))
+    def sample_contiguous(self, key, batch_size, sequence_length):
+        """Sample contiguous sequences."""
+        idxs = jax.random.randint(key, (batch_size,), 0, self.size - sequence_length)
+        offsets = jnp.arange(sequence_length)
+        all_idxs = (idxs[:, None] + offsets[None, :]).flatten()
 
-    def clear(self):
-        """Clear the replay buffer."""
-        self.size = self.pointer = 0
+        def fetch_and_reshape(arr):
+            return arr[all_idxs].reshape(batch_size, sequence_length, *arr.shape[1:])
+
+        return jax.tree.map(fetch_and_reshape, self.data)
