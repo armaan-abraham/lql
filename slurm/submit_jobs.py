@@ -64,6 +64,56 @@ def expand_all_commands(commands: list[str]) -> list[str]:
     return expanded
 
 
+def collapse_seed_commands(commands: list[str]) -> list[str]:
+    """
+    Collapse consecutive commands that differ only in --seed=N back into
+    --seed=[min-max] range notation. Non-consecutive or non-seed commands
+    are left as-is.
+    """
+    if not commands:
+        return []
+
+    seed_pattern = re.compile(r"--seed=(\d+)")
+
+    def get_seed_and_template(cmd: str) -> tuple[int, str] | None:
+        m = seed_pattern.search(cmd)
+        if not m:
+            return None
+        seed = int(m.group(1))
+        template = cmd[: m.start()] + "--seed={}" + cmd[m.end() :]
+        return seed, template
+
+    collapsed = []
+    i = 0
+    while i < len(commands):
+        parsed = get_seed_and_template(commands[i])
+        if parsed is None:
+            collapsed.append(commands[i])
+            i += 1
+            continue
+
+        seed_start, template = parsed
+        seed_end = seed_start
+        j = i + 1
+        while j < len(commands):
+            parsed_next = get_seed_and_template(commands[j])
+            if parsed_next is None:
+                break
+            next_seed, next_template = parsed_next
+            if next_template != template or next_seed != seed_end + 1:
+                break
+            seed_end = next_seed
+            j += 1
+
+        if seed_start == seed_end:
+            collapsed.append(commands[i])
+        else:
+            collapsed.append(template.format(f"[{seed_start}-{seed_end}]"))
+        i = j
+
+    return collapsed
+
+
 def count_running_jobs_in_partition(partition: str) -> int:
     """Count the number of running jobs for the current user in a partition."""
     user = getpass.getuser()
@@ -178,33 +228,42 @@ def main():
     print(f"Found {len(command_segments)} job(s) to submit")
 
     idx = 0
-    while idx < len(command_segments):
-        commands = command_segments[idx]
-        print(f"\nSubmitting job {idx + 1}/{len(command_segments)}...")
+    try:
+        while idx < len(command_segments):
+            commands = command_segments[idx]
+            print(f"\nSubmitting job {idx + 1}/{len(command_segments)}...")
 
-        # Try high priority partition first if enabled
-        if hi_template:
-            running_hi = count_running_jobs_in_partition(HI_PRIORITY_PARTITION)
-            print(f"High priority partition has {running_hi} running jobs")
-            hi_under_cap = running_hi < HI_PRIORITY_MAX_JOBS
-            # When both templates: use hi if under cap, else fall back to regular.
-            # When only hi template: depends on --hi-mode.
-            if job_template:
-                use_hi = hi_under_cap
+            # Try high priority partition first if enabled
+            if hi_template:
+                running_hi = count_running_jobs_in_partition(HI_PRIORITY_PARTITION)
+                print(f"High priority partition has {running_hi} running jobs")
+                hi_under_cap = running_hi < HI_PRIORITY_MAX_JOBS
+                # When both templates: use hi if under cap, else fall back to regular.
+                # When only hi template: depends on --hi-mode.
+                if job_template:
+                    use_hi = hi_under_cap
+                else:
+                    use_hi = True if args.hi_mode == "all" else hi_under_cap
+                if use_hi:
+                    print(f"Submitting to high priority partition...")
+                    if submit_job(commands, hi_template, args.job_log_dir):
+                        idx += 1
+                        continue
+
+            # Fall back to regular partition
+            if job_template and submit_job(commands, job_template, args.job_log_dir):
+                idx += 1
             else:
-                use_hi = True if args.hi_mode == "all" else hi_under_cap
-            if use_hi:
-                print(f"Submitting to high priority partition...")
-                if submit_job(commands, hi_template, args.job_log_dir):
-                    idx += 1
-                    continue
-
-        # Fall back to regular partition
-        if job_template and submit_job(commands, job_template, args.job_log_dir):
-            idx += 1
-        else:
-            print(f"Waiting {RETRY_WAIT_SECONDS}s before retry...")
-            time.sleep(RETRY_WAIT_SECONDS)
+                print(f"Waiting {RETRY_WAIT_SECONDS}s before retry...")
+                time.sleep(RETRY_WAIT_SECONDS)
+    except (Exception, KeyboardInterrupt) as e:
+        remaining = command_segments[idx:]
+        if remaining:
+            collapsed = collapse_seed_commands(remaining)
+            remain_path = args.commands_file.parent / f"REMAIN-{args.commands_file.name}"
+            remain_path.write_text("\n====\n".join(collapsed))
+            print(f"\nSaved {len(collapsed)} remaining job(s) to {remain_path}")
+        raise
 
     print(f"\nAll {len(command_segments)} jobs submitted successfully!")
 
