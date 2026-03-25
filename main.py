@@ -52,6 +52,7 @@ flags.DEFINE_string('ogbench_dataset_dir', None, 'OGBench dataset directory')
 
 flags.DEFINE_integer('horizon_length', 5, 'Number of transitions sampled in each contiguous block.')
 flags.DEFINE_bool('sparse', False, "make the task sparse reward")
+flags.DEFINE_float('reward_noise_std', 0.0, 'Std of Gaussian noise added to rewards (offline and online).')
 
 flags.DEFINE_bool('save_all_online_states', False, "save all trajectories to npy")
 flags.DEFINE_bool('jit_buffer', False, 'JIT-compile replay buffer operations')
@@ -69,6 +70,20 @@ class LoggingHelper:
         self.wandb_logger.log({f'{prefix}/{k}': v for k, v in data.items()}, step=step)
 
 def main(_):
+    # Auto-enable JIT buffer on GPUs with >= 48GB memory
+    gpu_devices = jax.devices('gpu') if jax.default_backend() == 'gpu' else []
+    if gpu_devices:
+        import subprocess
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=memory.total', '--format=csv,noheader,nounits'],
+            capture_output=True, text=True
+        )
+        gpu_mem_bytes = int(result.stdout.strip().split('\n')[0]) * 1024 * 1024
+        print(f"GPU memory detected: {gpu_mem_bytes / 1e9:.1f} GB")
+        if gpu_mem_bytes >= 44e9:
+            FLAGS.jit_buffer = True
+    print(f"Using JIT buffer: {FLAGS.jit_buffer}")
+
     exp_name = get_exp_name(FLAGS.seed)
     run = setup_wandb(project=FLAGS.wandb_project, group=FLAGS.run_group, name=exp_name)
     
@@ -133,6 +148,12 @@ def main(_):
             sparse_rewards = (ds["rewards"] != 0.0) * -1.0
             ds_dict = {k: v for k, v in ds.items()}
             ds_dict["rewards"] = sparse_rewards
+            ds = Dataset.create(**ds_dict)
+
+        if FLAGS.reward_noise_std > 0.0:
+            noise = np.random.normal(0.0, FLAGS.reward_noise_std, size=ds["rewards"].shape)
+            ds_dict = {k: v for k, v in ds.items()}
+            ds_dict["rewards"] = ds["rewards"] + noise
             ds = Dataset.create(**ds_dict)
 
         return ds
@@ -278,6 +299,9 @@ def main(_):
         if FLAGS.sparse:
             assert int_reward <= 0.0
             int_reward = (int_reward != 0.0) * -1.0
+
+        if FLAGS.reward_noise_std > 0.0:
+            int_reward = int_reward + np.random.normal(0.0, FLAGS.reward_noise_std)
 
         transition = dict(
             observations=ob,
