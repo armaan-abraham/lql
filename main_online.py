@@ -48,6 +48,7 @@ config_flags.DEFINE_config_file('agent', 'lql/agents/lql.py', lock_config=False)
 
 flags.DEFINE_float('dataset_proportion', 1.0, "Proportion of the dataset to use")
 flags.DEFINE_integer('dataset_replace_interval', 1000, 'Dataset replace interval, used for large datasets because of memory constraints')
+flags.DEFINE_integer('dataset_replace_count', 1, 'Number of npz files to load per replacement (trades CPU memory for less frequent replacements)')
 flags.DEFINE_string('ogbench_dataset_dir', None, 'OGBench dataset directory')
 
 flags.DEFINE_integer('horizon_length', 5, 'Number of transitions sampled in each contiguous block.')
@@ -106,11 +107,33 @@ def main(_):
         dataset_paths = [
             file for file in sorted(glob.glob(f"{FLAGS.ogbench_dataset_dir}/*.npz")) if '-val.npz' not in file
         ]
-        env, eval_env, train_dataset, val_dataset = make_ogbench_env_and_datasets(
+
+        def load_multiple_datasets(start_idx, count):
+            """Load count npz files starting from start_idx (wrapping around), return concatenated datasets."""
+            indices = [(start_idx + j) % len(dataset_paths) for j in range(count)]
+            all_train, all_val = [], []
+            for idx in indices:
+                td, vd = make_ogbench_env_and_datasets(
+                    FLAGS.env_name,
+                    dataset_path=dataset_paths[idx],
+                    compact_dataset=False,
+                    dataset_only=True,
+                    cur_env=env,
+                )
+                all_train.append(td)
+                all_val.append(vd)
+            if len(all_train) == 1:
+                return all_train[0], all_val[0]
+            combined_train = {k: np.concatenate([d[k] for d in all_train], axis=0) for k in all_train[0]}
+            combined_val = {k: np.concatenate([d[k] for d in all_val], axis=0) for k in all_val[0]}
+            return combined_train, combined_val
+
+        env, eval_env, _, _ = make_ogbench_env_and_datasets(
             FLAGS.env_name,
             dataset_path=dataset_paths[dataset_idx],
             compact_dataset=False,
         )
+        train_dataset, val_dataset = load_multiple_datasets(dataset_idx, FLAGS.dataset_replace_count)
     else:
         env, eval_env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name)
 
@@ -320,15 +343,9 @@ def main(_):
             save_agent(agent, FLAGS.save_dir, log_step)
 
         if FLAGS.ogbench_dataset_dir is not None and FLAGS.dataset_replace_interval != 0 and i % FLAGS.dataset_replace_interval == 0:
-            dataset_idx = (dataset_idx + 1) % len(dataset_paths)
-            print(f"Using new dataset: {dataset_paths[dataset_idx]}", flush=True)
-            train_dataset, val_dataset = make_ogbench_env_and_datasets(
-                FLAGS.env_name,
-                dataset_path=dataset_paths[dataset_idx],
-                compact_dataset=False,
-                dataset_only=True,
-                cur_env=env,
-            )
+            dataset_idx = (dataset_idx + FLAGS.dataset_replace_count) % len(dataset_paths)
+            print(f"Loading {FLAGS.dataset_replace_count} dataset(s) starting from: {dataset_paths[dataset_idx]}", flush=True)
+            train_dataset, val_dataset = load_multiple_datasets(dataset_idx, FLAGS.dataset_replace_count)
             train_dataset = process_train_dataset(train_dataset)
             train_buffer = ReplayBuffer.create_from_initial_dataset(
                 dict(train_dataset), max_size=train_dataset.size, jit_data=FLAGS.jit_buffer,
