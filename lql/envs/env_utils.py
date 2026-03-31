@@ -10,6 +10,23 @@ from gymnasium.spaces import Box
 from lql.utils.datasets import Dataset
 
 
+class StochasticTransitionWrapper(gymnasium.Wrapper):
+    """Adds Gaussian noise to actions before environment execution.
+
+    This makes transitions genuinely stochastic: the same (state, action) pair
+    can produce different next states across rollouts.
+    """
+
+    def __init__(self, env, noise_scale=0.05):
+        super().__init__(env)
+        self.noise_scale = noise_scale
+
+    def step(self, action):
+        noisy_action = action + self.noise_scale * np.random.randn(*action.shape)
+        noisy_action = np.clip(noisy_action, -1, 1)
+        return self.env.step(noisy_action)
+
+
 class EpisodeMonitor(gymnasium.Wrapper):
     """Environment wrapper to monitor episode statistics."""
 
