@@ -83,6 +83,7 @@ class ReplayBuffer(flax.struct.PyTreeNode):
         """
         init_size = len(next(iter(dataset_dict.values())))
         fill_size = min(init_size, max_size)
+        print(f"Initializing buffer with {fill_size} transitions (max_size={max_size})")
 
         def make_buf(init_arr):
             buf = np.zeros((max_size, *init_arr.shape[1:]), dtype=init_arr.dtype)
